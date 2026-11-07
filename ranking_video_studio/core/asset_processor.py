@@ -90,3 +90,25 @@ def process_avatar_image(path, size, shape):
     elif shape == "rounded":
         img.putalpha(_rounded_mask((size, size), max(2, size // 5)))
     return _surface_from_pil(img)
+
+
+def pil_surface(img):
+    """Public helper: PIL RGBA image -> premultiplied Cairo surface."""
+    return _surface_from_pil(img)
+
+
+def make_waving_flag(image_path, h_px):
+    """Pre-warp a flag image into a waving sprite (once, before render loop)."""
+    import math as _m
+    img = Image.open(image_path).convert("RGBA")
+    aspect = img.width / max(1, img.height)
+    w_px = int(h_px * aspect * 1.4)
+    img = img.resize((w_px, h_px), Image.Resampling.LANCZOS)
+
+    amp = int(h_px * 0.14)
+    out = Image.new("RGBA", (w_px, h_px + 2 * amp), (0, 0, 0, 0))
+    for x in range(w_px):
+        frac = x / max(1, w_px - 1)
+        off = int(_m.sin(frac * _m.pi * 2.2) * amp * frac)   # wave grows to fly-end
+        out.paste(img.crop((x, 0, x + 1, h_px)), (x, amp + off))
+    return _surface_from_pil(out)

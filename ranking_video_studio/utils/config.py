@@ -69,6 +69,24 @@ class RenderConfig:
     audio_file: str = ""
     audio_volume: int = 100
 
+    # ---- Incline 3D tower camera ----
+    camera_mode: str = "flat"      # "flat" | "incline"
+    camera_move: str = "pan"       # "pan" | "static" | "push" | "follow"
+    cam_height: float = 3.5        # camera eye height
+    cam_distance: float = 34.0     # distance behind row
+    cam_side: float = 1.9          # lateral offset = incline angle
+    cam_fov: float = 1.05          # focal multiplier
+    cam_look_height: float = 2.0
+    tower_color: tuple = (0.80, 0.76, 0.64)
+    plate_color: tuple = (0.24, 0.13, 0.12)
+    value_color: tuple = (0.48, 0.06, 0.10)
+    sky_top: tuple = (0.29, 0.49, 0.71)
+    sky_bottom: tuple = (0.74, 0.80, 0.84)
+    skyline_image: str = ""
+    value_prefix: str = "$ "
+    value_suffix: str = " B"
+    value_decimals: int = 1
+
     def scale(self):
         return max(0.6, min(self.width, self.height) / 1080.0)
 
@@ -78,5 +96,5 @@ class RenderConfig:
             self.width, self.height, self.bg_mode, self.bg_image,
             self.bg_blur, self.bg_dim, self.tile_image, self.tile_radius,
             self.tile_opacity, self.tint_enabled, self.tint_color,
-            self.avatar_shape,
+            self.avatar_shape, self.camera_mode, self.skyline_image,
         )

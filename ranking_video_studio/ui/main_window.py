@@ -264,6 +264,50 @@ class MainWindow(QWidget):
         gl.addLayout(_row(QLabel("Easing:"), self.easing_combo))
         form.addWidget(g)
 
+        # 6. Camera & Scene (Incline 3D Towers)
+        g = QGroupBox("6. Camera & Scene (Incline 3D Towers)")
+        gl = QVBoxLayout(g)
+        self.camera_combo = QComboBox()
+        self.camera_combo.addItems(["Flat 2D Bars", "Incline 3D Towers"])
+        self.camera_combo.setToolTip("Flat bars or pseudo-3D tower scene")
+        self.cammove_combo = QComboBox()
+        self.cammove_combo.addItems([
+            "Pan Reveal (track along row)", "Static Incline",
+            "Slow Push-In", "Follow Leader"])
+        self.cammove_combo.setToolTip("Camera movement (incline mode only)")
+        self.camh_slider = QSlider(Qt.Orientation.Horizontal)
+        self.camh_slider.setRange(15, 60)
+        self.camh_slider.setValue(35)
+        self.camh_slider.setToolTip("Camera eye height (1.5-6.0)")
+        self.camh_label = QLabel("Camera Height: 3.5")
+        self.cams_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cams_slider.setRange(5, 50)
+        self.cams_slider.setValue(19)
+        self.cams_slider.setToolTip("Lateral offset = incline angle (0.5-5.0)")
+        self.cams_label = QLabel("Incline Angle: 1.9")
+        self.fov_slider = QSlider(Qt.Orientation.Horizontal)
+        self.fov_slider.setRange(80, 160)
+        self.fov_slider.setValue(105)
+        self.fov_slider.setToolTip("Zoom / field of view (0.8-1.6)")
+        self.fov_label = QLabel("Zoom / FOV: 1.05")
+        self.vpre_edit = QLineEdit("$ ")
+        self.vpre_edit.setToolTip("Text before the tower value")
+        self.vsu_edit = QLineEdit(" B")
+        self.vsu_edit.setToolTip("Text after the tower value")
+        self.vdec_spin = QSpinBox()
+        self.vdec_spin.setRange(0, 3)
+        self.vdec_spin.setValue(1)
+        self.vdec_spin.setToolTip("Decimal places of the tower value")
+        gl.addLayout(_row(QLabel("Camera Mode:"), self.camera_combo))
+        gl.addLayout(_row(QLabel("Movement:"), self.cammove_combo))
+        gl.addLayout(_row(self.camh_label, self.camh_slider))
+        gl.addLayout(_row(self.cams_label, self.cams_slider))
+        gl.addLayout(_row(self.fov_label, self.fov_slider))
+        gl.addLayout(_row(QLabel("Value Prefix:"), self.vpre_edit,
+                          QLabel("Suffix:"), self.vsu_edit))
+        gl.addLayout(_row(QLabel("Value Decimals:"), self.vdec_spin))
+        form.addWidget(g)
+
         # Export
         g = QGroupBox("Export")
         gl = QVBoxLayout(g)
@@ -342,6 +386,14 @@ class MainWindow(QWidget):
             self.volume_slider.valueChanged,
             self.speed_spin.valueChanged,
             self.easing_combo.currentIndexChanged,
+            self.camera_combo.currentIndexChanged,
+            self.cammove_combo.currentIndexChanged,
+            self.camh_slider.valueChanged,
+            self.cams_slider.valueChanged,
+            self.fov_slider.valueChanged,
+            self.vpre_edit.textChanged,
+            self.vsu_edit.textChanged,
+            self.vdec_spin.valueChanged,
         ]
         for sig in simple:
             sig.connect(self._on_setting_changed)
@@ -359,6 +411,12 @@ class MainWindow(QWidget):
             lambda v: self.opacity_label.setText(f"Opacity: {v}%"))
         self.volume_slider.valueChanged.connect(
             lambda v: self.volume_label.setText(f"Volume: {v}%"))
+        self.camh_slider.valueChanged.connect(
+            lambda v: self.camh_label.setText(f"Camera Height: {v / 10:.1f}"))
+        self.cams_slider.valueChanged.connect(
+            lambda v: self.cams_label.setText(f"Incline Angle: {v / 10:.1f}"))
+        self.fov_slider.valueChanged.connect(
+            lambda v: self.fov_label.setText(f"Zoom / FOV: {v / 100:.2f}"))
 
         self.scrubber.valueChanged.connect(self._on_scrub)
         self.play_btn.clicked.connect(self._play_start)
@@ -400,6 +458,15 @@ class MainWindow(QWidget):
         cfg.audio_volume = self.volume_slider.value()
         cfg.speed = self.speed_spin.value()
         cfg.easing = EASING_OPTIONS[self.easing_combo.currentText()]
+        cfg.camera_mode = "incline" if self.camera_combo.currentIndex() == 1 else "flat"
+        cfg.camera_move = ["pan", "static", "push", "follow"][
+            self.cammove_combo.currentIndex()]
+        cfg.cam_height = self.camh_slider.value() / 10.0
+        cfg.cam_side = self.cams_slider.value() / 10.0
+        cfg.cam_fov = self.fov_slider.value() / 100.0
+        cfg.value_prefix = self.vpre_edit.text()
+        cfg.value_suffix = self.vsu_edit.text()
+        cfg.value_decimals = self.vdec_spin.value()
         return cfg
 
     # -------------------------------------------------------------- preview

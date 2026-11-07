@@ -41,8 +41,11 @@ def load_dataset(path):
         df["text"] = ""
     if "image" not in df.columns:
         df["image"] = ""
+    if "flag" not in df.columns:
+        df["flag"] = ""
     df["text"] = df["text"].fillna("").astype(str)
     df["image"] = df["image"].fillna("").astype(str)
+    df["flag"] = df["flag"].fillna("").astype(str)
 
     df = df.sort_values("score", ascending=False).head(MAX_ROWS).reset_index(drop=True)
     return df

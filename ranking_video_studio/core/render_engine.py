@@ -64,6 +64,10 @@ def build_assets(cfg, df):
             surf = ap.process_avatar_image(path.strip(), avatar_size, cfg.avatar_shape)
             if surf is not None:
                 assets.avatars[i] = surf
+
+    if getattr(cfg, "camera_mode", "flat") == "incline":
+        from core import incline_renderer as ir
+        ir.build_incline_assets(cfg, df, assets, ap)
     return assets
 
 
@@ -174,6 +178,10 @@ def render_frame(ctx, cfg, df, assets, progress):
     ctx.set_source_rgba(0, 0, 0, 0)
     ctx.paint()
     ctx.set_operator(cairo.OPERATOR_OVER)
+
+    if getattr(cfg, "camera_mode", "flat") == "incline":
+        from core import incline_renderer as ir
+        return ir.render_incline_frame(ctx, cfg, df, assets, progress)
 
     n = min(TOP_N, len(df))
     if n == 0:
