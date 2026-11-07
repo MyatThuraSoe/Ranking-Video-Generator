@@ -2,21 +2,25 @@ import os
 
 import cairo
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QImage
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QImage
 from PyQt6.QtWidgets import (
-    QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog,
-    QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QProgressBar,
-    QPushButton, QScrollArea, QSlider, QSpinBox, QSplitter, QVBoxLayout,
-    QWidget,
+    QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox,
+    QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
+    QMenuBar, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider,
+    QSpinBox, QSplitter, QVBoxLayout, QWidget,
 )
 
 from core.export_worker import VideoExportThread
 from core.render_engine import build_assets, render_frame
 from data.data_loader import load_dataset
 from data.demo_data import get_demo_data
+from data import state_store as store
+from data.state_store import get_theme, set_theme
+from ui import styles
 from ui.preview_viewport import PreviewViewport
 from utils.config import (
-    ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS, RenderConfig,
+    BASE_DURATION, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
+    RenderConfig,
 )
 
 EASING_OPTIONS = {
@@ -25,7 +29,8 @@ EASING_OPTIONS = {
     "Exponential Dramatic": "exponential",
     "Linear Steady": "linear",
 }
-BG_MODES = {"Solid Color": "solid", "Gradient": "gradient", "Image": "image"}
+BG_MODES = {"Sky Gradient": "sky", "Custom Image": "image"}
+TITLE_ALIGNS = {"Left": "left", "Center": "center", "Right": "right"}
 BADGE_SHAPES = {"Pill": "pill", "Circle": "circle", "Plain Text": "text"}
 AVATAR_SHAPES = {"Circle": "circle", "Rounded Square": "rounded",
                  "Square": "square"}
@@ -39,6 +44,7 @@ class ColorButton(QPushButton):
     def __init__(self, rgb, parent=None):
         super().__init__(parent)
         self.rgb = tuple(rgb)
+        self.setObjectName("colorBtn")
         self.setFixedHeight(30)
         self.setMinimumWidth(70)
         self.clicked.connect(self._pick)
@@ -46,9 +52,7 @@ class ColorButton(QPushButton):
 
     def _repaint(self):
         r, g, b = [int(c * 255) for c in self.rgb]
-        self.setStyleSheet(
-            f"background-color: rgb({r},{g},{b}); border: 1px solid #666680;"
-            f" border-radius: 6px;")
+        self.setStyleSheet(f"background-color: rgb({r},{g},{b});")
 
     def _pick(self):
         r, g, b = [int(c * 255) for c in self.rgb]
@@ -69,11 +73,22 @@ def _row(*widgets, stretch_last=True):
     return lay
 
 
+def _font_spin(value, tip):
+    sp = QDoubleSpinBox()
+    sp.setRange(0.08, 1.20)
+    sp.setSingleStep(0.02)
+    sp.setDecimals(2)
+    sp.setValue(value)
+    sp.setToolTip(tip)
+    return sp
+
+
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Ranking Video Studio (2K Max)")
         self.resize(1400, 900)
+        self.setAcceptDrops(True)
 
         self.df = get_demo_data()
         self.assets = None
@@ -89,12 +104,65 @@ class MainWindow(QWidget):
         self._connect_signals()
         self.update_preview()
 
+    # ------------------------------------------------------------- menu bar
+    def _build_menu_bar(self):
+        self.menu_bar = QMenuBar(self)
+        file_menu = self.menu_bar.addMenu("File")
+        act = file_menu.addAction("Import CSV / Excel…")
+        act.triggered.connect(self._import_dataset)
+        act = file_menu.addAction("Edit Data Table…")
+        act.triggered.connect(self._edit_data_table)
+        file_menu.addSeparator()
+        act = file_menu.addAction("Save Current Frame as PNG…")
+        act.triggered.connect(self._save_frame_png)
+        act = file_menu.addAction("Export Video…")
+        act.triggered.connect(self._start_export)
+        file_menu.addSeparator()
+        act = file_menu.addAction("Quit")
+        act.triggered.connect(self.close)
+
+        tpl_menu = self.menu_bar.addMenu("Templates")
+        act = tpl_menu.addAction("Save Current Settings as Template…")
+        act.triggered.connect(self._save_template)
+        act = tpl_menu.addAction("Browse / Apply Templates…")
+        act.triggered.connect(self._browse_templates)
+
+        theme_menu = self.menu_bar.addMenu("Theme")
+        self._theme_group = QActionGroup(self)
+        self._theme_group.setExclusive(True)
+        self._theme_actions = {}
+        current = get_theme()
+        if current not in styles.THEME_NAMES:
+            current = "Dark"
+        for name in styles.THEME_NAMES:
+            act = theme_menu.addAction(name)
+            act.setCheckable(True)
+            act.setChecked(name == current)
+            act.triggered.connect(
+                lambda _checked=False, n=name: self._apply_theme(n))
+            self._theme_group.addAction(act)
+            self._theme_actions[name] = act
+
+    def _apply_theme(self, name):
+        app = QApplication.instance()
+        if app is not None:
+            styles.apply_theme(app, name)
+        set_theme(name)
+        self._theme_actions[name].setChecked(True)
+
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
-        root = QHBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self._build_menu_bar()
+        root.addWidget(self.menu_bar)
+        body = QWidget()
+        body_lay = QHBoxLayout(body)
+        body_lay.setContentsMargins(8, 8, 8, 8)
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        root.addWidget(splitter)
+        body_lay.addWidget(splitter)
+        root.addWidget(body, 1)
 
         # ---------------- left panel ----------------
         left_holder = QWidget()
@@ -109,6 +177,18 @@ class MainWindow(QWidget):
         form = QVBoxLayout(inner)
         form.setSpacing(10)
 
+        # Templates
+        g = QGroupBox("Templates")
+        gl = QVBoxLayout(g)
+        self.save_tpl_btn = QPushButton("Save Current as Template")
+        self.save_tpl_btn.setToolTip("Remember every current setting as a named "
+                                     "template you can re-apply later")
+        self.browse_tpl_btn = QPushButton("Browse / Apply Templates…")
+        self.browse_tpl_btn.setToolTip("Find a saved template and restore its "
+                                       "settings without re-selecting anything")
+        gl.addLayout(_row(self.save_tpl_btn, self.browse_tpl_btn))
+        form.addWidget(g)
+
         # 1. Dataset
         g = QGroupBox("1. Dataset")
         self.file_label = QLabel("Demo dataset (6 items)")
@@ -119,6 +199,17 @@ class MainWindow(QWidget):
         gl = QVBoxLayout(g)
         gl.addWidget(self.file_label)
         gl.addWidget(self.import_btn)
+        self.table_btn = QPushButton("Edit Data Table…")
+        self.table_btn.setToolTip("Open the editable data table: change names, "
+                                  "scores, text and images, auto-save and "
+                                  "save named project states")
+        gl.addWidget(self.table_btn)
+        self.topn_spin = QSpinBox()
+        self.topn_spin.setRange(1, max(1, len(self.df)))
+        self.topn_spin.setValue(len(self.df))
+        self.topn_spin.setToolTip("How many ranked items to render "
+                                  "(defaults to the full dataset; lower it to show fewer)")
+        gl.addLayout(_row(QLabel("Items to show:"), self.topn_spin))
         form.addWidget(g)
 
         # 2. Resolution & Quality
@@ -136,15 +227,26 @@ class MainWindow(QWidget):
         self.fps_combo.addItems([str(f) for f in FPS_OPTIONS])
         self.fps_combo.setCurrentIndex(1)
         self.fps_combo.setToolTip("Frames per second")
-        self.duration_spin = QSpinBox()
-        self.duration_spin.setRange(3, 120)
-        self.duration_spin.setValue(8)
-        self.duration_spin.setSuffix(" s")
-        self.duration_spin.setToolTip("Video duration in seconds")
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItems(ENCODE_PRESETS)
+        self.preset_combo.setCurrentIndex(1)
+        self.preset_combo.setToolTip("FFmpeg encode speed (faster = bigger file)")
+        self.speed_spin = QDoubleSpinBox()
+        self.speed_spin.setRange(0.25, 4.0)
+        self.speed_spin.setSingleStep(0.25)
+        self.speed_spin.setValue(1.0)
+        self.speed_spin.setSuffix("x")
+        self.speed_spin.setToolTip(
+            "Camera pan speed; faster camera = shorter video "
+            f"(duration = {BASE_DURATION:.0f}s / speed)")
+        self.duration_label = QLabel(f"{BASE_DURATION:.1f} s")
+        self.duration_label.setToolTip("Resulting video duration")
         gl.addLayout(_row(QLabel("Aspect / Resolution:"), self.aspect_combo))
         gl.addLayout(_row(QLabel("Quality:"), self.quality_combo))
         gl.addLayout(_row(QLabel("Frame rate:"), self.fps_combo))
-        gl.addLayout(_row(QLabel("Duration:"), self.duration_spin))
+        gl.addLayout(_row(QLabel("Encode preset:"), self.preset_combo))
+        gl.addLayout(_row(QLabel("Camera speed:"), self.speed_spin,
+                          self.duration_label))
         form.addWidget(g)
 
         # 3. Background & Canvas
@@ -152,16 +254,31 @@ class MainWindow(QWidget):
         gl = QVBoxLayout(g)
         self.title_edit = QLineEdit("TOP RANKINGS")
         self.title_edit.setToolTip("Video title shown at the top")
+        self.title_align_combo = QComboBox()
+        self.title_align_combo.addItems(TITLE_ALIGNS.keys())
+        self.title_align_combo.setToolTip("Horizontal alignment of the title")
+        self.title_size_spin = QSpinBox()
+        self.title_size_spin.setRange(12, 120)
+        self.title_size_spin.setValue(40)
+        self.title_size_spin.setSuffix(" px")
+        self.title_size_spin.setToolTip("Title font size")
+        self.title_color_btn = ColorButton((1.0, 1.0, 1.0))
+        self.title_color_btn.setToolTip("Title text color")
+        self.title_margin_spin = QSpinBox()
+        self.title_margin_spin.setRange(0, 400)
+        self.title_margin_spin.setValue(24)
+        self.title_margin_spin.setSuffix(" px")
+        self.title_margin_spin.setToolTip("Gap from the top edge to the title")
         self.bg_mode_combo = QComboBox()
         self.bg_mode_combo.addItems(BG_MODES.keys())
-        self.bg_mode_combo.setCurrentIndex(1)
-        self.bg_mode_combo.setToolTip("Background rendering mode")
-        self.bg_color_btn = ColorButton((0.07, 0.07, 0.14))
-        self.bg_color_btn.setToolTip("Solid color / gradient bottom color")
-        self.bg_color2_btn = ColorButton((0.17, 0.10, 0.32))
-        self.bg_color2_btn.setToolTip("Gradient top color")
+        self.bg_mode_combo.setCurrentIndex(0)
+        self.bg_mode_combo.setToolTip("Sky gradient or a custom backdrop image")
         self.bg_image_btn = QPushButton("Background image...")
-        self.bg_image_btn.setToolTip("PNG/JPG used when mode = Image")
+        self.bg_image_btn.setToolTip("PNG/JPG used when mode = Custom Image")
+        self.bg_remove_btn = QPushButton("Remove")
+        self.bg_remove_btn.setFixedWidth(70)
+        self.bg_remove_btn.setEnabled(False)
+        self.bg_remove_btn.setToolTip("Clear the loaded background image")
         self.bg_image_label = QLabel("none")
         self.bg_image_label.setWordWrap(True)
         self.blur_slider = QSlider(Qt.Orientation.Horizontal)
@@ -175,10 +292,13 @@ class MainWindow(QWidget):
         self.dim_slider.setToolTip("Darken background image (0-80%)")
         self.dim_label = QLabel("Dim: 40%")
         gl.addLayout(_row(QLabel("Title:"), self.title_edit))
+        gl.addLayout(_row(QLabel("Align:"), self.title_align_combo,
+                          QLabel("Size:"), self.title_size_spin,
+                          self.title_color_btn))
+        gl.addLayout(_row(QLabel("Top margin:"), self.title_margin_spin))
         gl.addLayout(_row(QLabel("Mode:"), self.bg_mode_combo))
-        gl.addLayout(_row(QLabel("Color 1:"), self.bg_color_btn,
-                          QLabel("Color 2:"), self.bg_color2_btn))
-        gl.addLayout(_row(self.bg_image_btn, self.bg_image_label))
+        gl.addLayout(_row(self.bg_image_btn, self.bg_remove_btn,
+                          self.bg_image_label))
         gl.addLayout(_row(self.blur_label, self.blur_slider))
         gl.addLayout(_row(self.dim_label, self.dim_slider))
         form.addWidget(g)
@@ -193,48 +313,53 @@ class MainWindow(QWidget):
         self.badge_shape_combo.setToolTip("Shape behind the rank number")
         self.badge_color_btn = ColorButton((1.0, 0.76, 0.16))
         self.badge_color_btn.setToolTip("Badge background color")
-        self.rank_color_btn = ColorButton((0.05, 0.05, 0.10))
-        self.rank_color_btn.setToolTip("Rank number text color")
-        self.rank_size_spin = QSpinBox()
-        self.rank_size_spin.setRange(16, 48)
-        self.rank_size_spin.setValue(28)
-        self.rank_size_spin.setToolTip("Rank number font size (px)")
+        self.badge_size_spin = QDoubleSpinBox()
+        self.badge_size_spin.setRange(0.5, 3.0)
+        self.badge_size_spin.setSingleStep(0.1)
+        self.badge_size_spin.setDecimals(1)
+        self.badge_size_spin.setValue(1.0)
+        self.badge_size_spin.setSuffix("x")
+        self.badge_size_spin.setToolTip("Scale of the badge background shape")
         gl.addWidget(self.badge_check)
         gl.addLayout(_row(QLabel("Shape:"), self.badge_shape_combo))
-        gl.addLayout(_row(QLabel("Badge color:"), self.badge_color_btn,
-                          QLabel("Text color:"), self.rank_color_btn))
-        gl.addLayout(_row(QLabel("Font size:"), self.rank_size_spin))
+        gl.addLayout(_row(QLabel("Badge color:"), self.badge_color_btn))
+        gl.addLayout(_row(QLabel("Badge size:"), self.badge_size_spin))
         form.addWidget(g)
 
-        # 5. Tiles, Avatars & Audio
-        g = QGroupBox("5. Tiles, Avatars & Audio")
+        # 5. Avatars & Audio
+        g = QGroupBox("5. Avatars & Audio")
         gl = QVBoxLayout(g)
-        self.bar_color_btn = ColorButton((0.16, 0.47, 0.89))
-        self.bar_color_btn.setToolTip("Vector bar color")
-        self.tile_btn = QPushButton("Custom tile PNG...")
-        self.tile_btn.setToolTip("Replace vector bars with a PNG texture")
-        self.tile_label = QLabel("vector bars")
-        self.tile_label.setWordWrap(True)
-        self.radius_slider = QSlider(Qt.Orientation.Horizontal)
-        self.radius_slider.setRange(0, 40)
-        self.radius_slider.setValue(16)
-        self.radius_slider.setToolTip("Corner rounding in px")
-        self.radius_label = QLabel("Radius: 16")
-        self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self.opacity_slider.setRange(20, 100)
-        self.opacity_slider.setValue(100)
-        self.opacity_slider.setToolTip("Tile opacity (20-100%)")
-        self.opacity_label = QLabel("Opacity: 100%")
-        self.tint_check = QCheckBox("Color tint")
-        self.tint_check.setToolTip("Overlay a translucent color on tiles")
-        self.tint_color_btn = ColorButton((0.2, 0.5, 1.0))
         self.shadow_check = QCheckBox("Drop shadow")
         self.shadow_check.setChecked(True)
         self.avatar_combo = QComboBox()
         self.avatar_combo.addItems(AVATAR_SHAPES.keys())
         self.avatar_combo.setToolTip("Avatar/logo crop shape")
+        self.avatar_size_spin = QDoubleSpinBox()
+        self.avatar_size_spin.setRange(0.5, 3.0)
+        self.avatar_size_spin.setSingleStep(0.1)
+        self.avatar_size_spin.setDecimals(1)
+        self.avatar_size_spin.setValue(1.0)
+        self.avatar_size_spin.setSuffix("x")
+        self.avatar_size_spin.setToolTip("Scale of the image on each tower")
+        self.avatar_radius_slider = QSlider(Qt.Orientation.Horizontal)
+        self.avatar_radius_slider.setRange(0, 100)
+        self.avatar_radius_slider.setValue(0)
+        self.avatar_radius_slider.setToolTip(
+            "Corner rounding for square images (0% sharp, 100% circle)")
+        self.avatar_radius_label = QLabel("Radius: 0%")
+        self.avatar_border_color_btn = ColorButton((1.0, 1.0, 1.0))
+        self.avatar_border_color_btn.setToolTip("Color of the image border")
+        self.avatar_border_size_slider = QSlider(Qt.Orientation.Horizontal)
+        self.avatar_border_size_slider.setRange(0, 30)
+        self.avatar_border_size_slider.setValue(0)
+        self.avatar_border_size_slider.setToolTip("Image border thickness (0 = none)")
+        self.avatar_border_size_label = QLabel("Border: 0%")
         self.audio_btn = QPushButton("Background music...")
         self.audio_btn.setToolTip("MP3/WAV/AAC/M4A, looped and faded out")
+        self.audio_remove_btn = QPushButton("Remove")
+        self.audio_remove_btn.setFixedWidth(70)
+        self.audio_remove_btn.setEnabled(False)
+        self.audio_remove_btn.setToolTip("Clear the loaded background music")
         self.audio_label = QLabel("none")
         self.audio_label.setWordWrap(True)
         self.volume_slider = QSlider(Qt.Orientation.Horizontal)
@@ -242,54 +367,67 @@ class MainWindow(QWidget):
         self.volume_slider.setValue(100)
         self.volume_slider.setToolTip("Music volume (10-150%)")
         self.volume_label = QLabel("Volume: 100%")
-        self.speed_spin = QDoubleSpinBox()
-        self.speed_spin.setRange(0.25, 3.0)
-        self.speed_spin.setSingleStep(0.25)
-        self.speed_spin.setValue(1.0)
-        self.speed_spin.setSuffix("x")
-        self.speed_spin.setToolTip("Animation speed multiplier")
         self.easing_combo = QComboBox()
         self.easing_combo.addItems(EASING_OPTIONS.keys())
         self.easing_combo.setToolTip("Animation easing curve")
-        gl.addLayout(_row(QLabel("Bar color:"), self.bar_color_btn))
-        gl.addLayout(_row(self.tile_btn, self.tile_label))
-        gl.addLayout(_row(self.radius_label, self.radius_slider))
-        gl.addLayout(_row(self.opacity_label, self.opacity_slider))
-        gl.addLayout(_row(self.tint_check, self.tint_color_btn))
         gl.addWidget(self.shadow_check)
         gl.addLayout(_row(QLabel("Avatar shape:"), self.avatar_combo))
-        gl.addLayout(_row(self.audio_btn, self.audio_label))
+        gl.addLayout(_row(QLabel("Image size:"), self.avatar_size_spin))
+        gl.addLayout(_row(self.avatar_radius_label, self.avatar_radius_slider))
+        gl.addLayout(_row(QLabel("Border color:"), self.avatar_border_color_btn))
+        gl.addLayout(_row(self.avatar_border_size_label,
+                          self.avatar_border_size_slider))
+        gl.addLayout(_row(self.audio_btn, self.audio_remove_btn,
+                          self.audio_label))
         gl.addLayout(_row(self.volume_label, self.volume_slider))
-        gl.addLayout(_row(QLabel("Speed:"), self.speed_spin))
         gl.addLayout(_row(QLabel("Easing:"), self.easing_combo))
         form.addWidget(g)
 
         # 6. Camera & Scene (Incline 3D Towers)
         g = QGroupBox("6. Camera & Scene (Incline 3D Towers)")
         gl = QVBoxLayout(g)
-        self.camera_combo = QComboBox()
-        self.camera_combo.addItems(["Flat 2D Bars", "Incline 3D Towers"])
-        self.camera_combo.setToolTip("Flat bars or pseudo-3D tower scene")
-        self.cammove_combo = QComboBox()
-        self.cammove_combo.addItems([
-            "Pan Reveal (track along row)", "Static Incline",
-            "Slow Push-In", "Follow Leader"])
-        self.cammove_combo.setToolTip("Camera movement (incline mode only)")
-        self.camh_slider = QSlider(Qt.Orientation.Horizontal)
-        self.camh_slider.setRange(15, 60)
-        self.camh_slider.setValue(35)
-        self.camh_slider.setToolTip("Camera eye height (1.5-6.0)")
-        self.camh_label = QLabel("Camera Height: 3.5")
+        self.cam_elev_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cam_elev_slider.setRange(10, 80)
+        self.cam_elev_slider.setValue(35)
+        self.cam_elev_slider.setToolTip(
+            "How high the camera flies ABOVE the tracked tower top (1.0-8.0)")
+        self.cam_elev_label = QLabel("Camera Elevation: 3.5")
+        self.cam_dist_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cam_dist_slider.setRange(150, 500)
+        self.cam_dist_slider.setValue(260)
+        self.cam_dist_slider.setToolTip(
+            "How far back the camera sits from the row (15.0-50.0)")
+        self.cam_dist_label = QLabel("Camera Distance: 26.0")
+        self.cam_ahead_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cam_ahead_slider.setRange(0, 100)
+        self.cam_ahead_slider.setValue(12)
+        self.cam_ahead_slider.setToolTip(
+            "Aim ahead toward incoming towers; 0 looks back along the row (0.0-10.0)")
+        self.cam_ahead_label = QLabel("Look-Ahead: 1.2")
+        self.cam_focus_slider = QSlider(Qt.Orientation.Horizontal)
+        self.cam_focus_slider.setRange(-10, 20)
+        self.cam_focus_slider.setValue(5)
+        self.cam_focus_slider.setToolTip(
+            "Look-at height above the tower top; raise to frame logos (-1.0-2.0)")
+        self.cam_focus_label = QLabel("Focus Offset: 0.5")
         self.cams_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cams_slider.setRange(5, 50)
+        self.cams_slider.setRange(0, 120)
         self.cams_slider.setValue(19)
-        self.cams_slider.setToolTip("Lateral offset = incline angle (0.5-5.0)")
+        self.cams_slider.setToolTip("Lateral offset = incline angle (0.0-12.0)")
         self.cams_label = QLabel("Incline Angle: 1.9")
         self.fov_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fov_slider.setRange(80, 160)
+        self.fov_slider.setRange(60, 180)
         self.fov_slider.setValue(105)
-        self.fov_slider.setToolTip("Zoom / field of view (0.8-1.6)")
+        self.fov_slider.setToolTip("Zoom / field of view (0.6-1.8)")
         self.fov_label = QLabel("Zoom / FOV: 1.05")
+        self.tower_color_btn = ColorButton((0.80, 0.76, 0.64))
+        self.tower_color_btn.setToolTip("Tower face color")
+        self.plate_color_btn = ColorButton((0.24, 0.13, 0.12))
+        self.plate_color_btn.setToolTip("Name plate color")
+        self.skytop_color_btn = ColorButton((0.29, 0.49, 0.71))
+        self.skytop_color_btn.setToolTip("Sky gradient top color")
+        self.skybot_color_btn = ColorButton((0.74, 0.80, 0.84))
+        self.skybot_color_btn.setToolTip("Sky gradient bottom color")
         self.vpre_edit = QLineEdit("$ ")
         self.vpre_edit.setToolTip("Text before the tower value")
         self.vsu_edit = QLineEdit(" B")
@@ -298,14 +436,52 @@ class MainWindow(QWidget):
         self.vdec_spin.setRange(0, 3)
         self.vdec_spin.setValue(1)
         self.vdec_spin.setToolTip("Decimal places of the tower value")
-        gl.addLayout(_row(QLabel("Camera Mode:"), self.camera_combo))
-        gl.addLayout(_row(QLabel("Movement:"), self.cammove_combo))
-        gl.addLayout(_row(self.camh_label, self.camh_slider))
+        gl.addLayout(_row(self.cam_elev_label, self.cam_elev_slider))
+        gl.addLayout(_row(self.cam_dist_label, self.cam_dist_slider))
+        gl.addLayout(_row(self.cam_ahead_label, self.cam_ahead_slider))
+        gl.addLayout(_row(self.cam_focus_label, self.cam_focus_slider))
         gl.addLayout(_row(self.cams_label, self.cams_slider))
         gl.addLayout(_row(self.fov_label, self.fov_slider))
+        gl.addLayout(_row(QLabel("Tower:"), self.tower_color_btn,
+                          QLabel("Plate:"), self.plate_color_btn))
+        gl.addLayout(_row(QLabel("Sky top:"), self.skytop_color_btn,
+                          QLabel("Sky bottom:"), self.skybot_color_btn))
         gl.addLayout(_row(QLabel("Value Prefix:"), self.vpre_edit,
                           QLabel("Suffix:"), self.vsu_edit))
         gl.addLayout(_row(QLabel("Value Decimals:"), self.vdec_spin))
+        form.addWidget(g)
+
+        # 7. Typography & Colors
+        g = QGroupBox("7. Typography & Colors")
+        gl = QVBoxLayout(g)
+        self.rank_size_spin = QSpinBox()
+        self.rank_size_spin.setRange(16, 48)
+        self.rank_size_spin.setValue(28)
+        self.rank_size_spin.setToolTip("Rank number font size (px)")
+        self.rank_color_btn = ColorButton((0.05, 0.05, 0.10))
+        self.rank_color_btn.setToolTip("Rank number text color")
+        self.name_size_spin = _font_spin(0.34, "Name font size (world units)")
+        self.name_color_btn = ColorButton((1.0, 1.0, 1.0))
+        self.name_color_btn.setToolTip("Name text color")
+        self.value_size_spin = _font_spin(0.30, "Value font size (world units)")
+        self.value_color_btn = ColorButton((0.48, 0.06, 0.10))
+        self.value_color_btn.setToolTip("Value text color")
+        self.text_size_spin = _font_spin(0.20, "Text (subtitle) font size (world units)")
+        self.text_color_btn = ColorButton((0.85, 0.85, 0.88))
+        self.text_color_btn.setToolTip("Text (subtitle) color")
+        self.extra_size_spin = _font_spin(0.18, "Extra text font size (world units)")
+        self.extra_color_btn = ColorButton((0.80, 0.82, 0.85))
+        self.extra_color_btn.setToolTip("Extra text color")
+        gl.addLayout(_row(QLabel("Rank number:"), self.rank_size_spin,
+                          self.rank_color_btn))
+        gl.addLayout(_row(QLabel("Name:"), self.name_size_spin,
+                          self.name_color_btn))
+        gl.addLayout(_row(QLabel("Value:"), self.value_size_spin,
+                          self.value_color_btn))
+        gl.addLayout(_row(QLabel("Text:"), self.text_size_spin,
+                          self.text_color_btn))
+        gl.addLayout(_row(QLabel("Extra text:"), self.extra_size_spin,
+                          self.extra_color_btn))
         form.addWidget(g)
 
         # Export
@@ -316,10 +492,13 @@ class MainWindow(QWidget):
         self.progress_bar.setValue(0)
         self.export_btn = QPushButton("Export Video to MP4")
         self.export_btn.setObjectName("exportBtn")
+        self.frame_btn = QPushButton("Save Current Frame as PNG")
+        self.frame_btn.setToolTip("Export the previewed frame as a still image")
         self.cancel_btn = QPushButton("Cancel Export")
         self.cancel_btn.setVisible(False)
         gl.addWidget(self.progress_bar)
         gl.addWidget(self.export_btn)
+        gl.addWidget(self.frame_btn)
         gl.addWidget(self.cancel_btn)
         form.addWidget(g)
         form.addStretch(1)
@@ -362,33 +541,47 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------- signals
     def _connect_signals(self):
         self.import_btn.clicked.connect(self._import_dataset)
+        self.table_btn.clicked.connect(self._edit_data_table)
+        self.save_tpl_btn.clicked.connect(self._save_template)
+        self.browse_tpl_btn.clicked.connect(self._browse_templates)
         self.bg_image_btn.clicked.connect(self._pick_bg_image)
-        self.tile_btn.clicked.connect(self._pick_tile)
+        self.bg_remove_btn.clicked.connect(self._remove_bg_image)
         self.audio_btn.clicked.connect(self._pick_audio)
+        self.audio_remove_btn.clicked.connect(self._remove_audio)
 
         simple = [
             self.title_edit.textChanged,
+            self.title_align_combo.currentIndexChanged,
+            self.title_size_spin.valueChanged,
+            self.title_margin_spin.valueChanged,
+            self.topn_spin.valueChanged,
             self.aspect_combo.currentIndexChanged,
             self.quality_combo.currentIndexChanged,
             self.fps_combo.currentIndexChanged,
-            self.duration_spin.valueChanged,
+            self.preset_combo.currentIndexChanged,
             self.bg_mode_combo.currentIndexChanged,
             self.blur_slider.valueChanged,
             self.dim_slider.valueChanged,
             self.badge_check.toggled,
             self.badge_shape_combo.currentIndexChanged,
+            self.badge_size_spin.valueChanged,
             self.rank_size_spin.valueChanged,
-            self.radius_slider.valueChanged,
-            self.opacity_slider.valueChanged,
-            self.tint_check.toggled,
+            self.name_size_spin.valueChanged,
+            self.value_size_spin.valueChanged,
+            self.text_size_spin.valueChanged,
+            self.extra_size_spin.valueChanged,
             self.shadow_check.toggled,
             self.avatar_combo.currentIndexChanged,
+            self.avatar_size_spin.valueChanged,
+            self.avatar_radius_slider.valueChanged,
+            self.avatar_border_size_slider.valueChanged,
             self.volume_slider.valueChanged,
             self.speed_spin.valueChanged,
             self.easing_combo.currentIndexChanged,
-            self.camera_combo.currentIndexChanged,
-            self.cammove_combo.currentIndexChanged,
-            self.camh_slider.valueChanged,
+            self.cam_elev_slider.valueChanged,
+            self.cam_dist_slider.valueChanged,
+            self.cam_ahead_slider.valueChanged,
+            self.cam_focus_slider.valueChanged,
             self.cams_slider.valueChanged,
             self.fov_slider.valueChanged,
             self.vpre_edit.textChanged,
@@ -397,22 +590,35 @@ class MainWindow(QWidget):
         ]
         for sig in simple:
             sig.connect(self._on_setting_changed)
-        for btn in (self.bg_color_btn, self.bg_color2_btn, self.badge_color_btn,
-                    self.rank_color_btn, self.bar_color_btn, self.tint_color_btn):
+        for btn in (self.badge_color_btn, self.rank_color_btn,
+                    self.tower_color_btn, self.plate_color_btn,
+                    self.value_color_btn, self.skytop_color_btn,
+                    self.skybot_color_btn, self.name_color_btn,
+                    self.text_color_btn, self.extra_color_btn,
+                    self.title_color_btn, self.avatar_border_color_btn):
             btn.colorChanged.connect(self._on_setting_changed)
 
         self.blur_slider.valueChanged.connect(
             lambda v: self.blur_label.setText(f"Blur: {v}"))
         self.dim_slider.valueChanged.connect(
             lambda v: self.dim_label.setText(f"Dim: {v}%"))
-        self.radius_slider.valueChanged.connect(
-            lambda v: self.radius_label.setText(f"Radius: {v}"))
-        self.opacity_slider.valueChanged.connect(
-            lambda v: self.opacity_label.setText(f"Opacity: {v}%"))
+        self.avatar_radius_slider.valueChanged.connect(
+            lambda v: self.avatar_radius_label.setText(f"Radius: {v}%"))
+        self.avatar_border_size_slider.valueChanged.connect(
+            lambda v: self.avatar_border_size_label.setText(f"Border: {v}%"))
         self.volume_slider.valueChanged.connect(
             lambda v: self.volume_label.setText(f"Volume: {v}%"))
-        self.camh_slider.valueChanged.connect(
-            lambda v: self.camh_label.setText(f"Camera Height: {v / 10:.1f}"))
+        self.speed_spin.valueChanged.connect(
+            lambda _v: self.duration_label.setText(
+                f"{self._video_duration():.1f} s"))
+        self.cam_elev_slider.valueChanged.connect(
+            lambda v: self.cam_elev_label.setText(f"Camera Elevation: {v / 10:.1f}"))
+        self.cam_dist_slider.valueChanged.connect(
+            lambda v: self.cam_dist_label.setText(f"Camera Distance: {v / 10:.1f}"))
+        self.cam_ahead_slider.valueChanged.connect(
+            lambda v: self.cam_ahead_label.setText(f"Look-Ahead: {v / 10:.1f}"))
+        self.cam_focus_slider.valueChanged.connect(
+            lambda v: self.cam_focus_label.setText(f"Focus Offset: {v / 10:.1f}"))
         self.cams_slider.valueChanged.connect(
             lambda v: self.cams_label.setText(f"Incline Angle: {v / 10:.1f}"))
         self.fov_slider.valueChanged.connect(
@@ -425,52 +631,257 @@ class MainWindow(QWidget):
         self.end_btn.clicked.connect(lambda: self.scrubber.setValue(1000))
 
         self.export_btn.clicked.connect(self._start_export)
+        self.frame_btn.clicked.connect(self._save_frame_png)
         self.cancel_btn.clicked.connect(self._cancel_export)
 
     # -------------------------------------------------------------- config
+    def _video_duration(self):
+        return BASE_DURATION / max(0.05, self.speed_spin.value())
+
     def collect_config(self):
         cfg = RenderConfig()
         cfg.width, cfg.height = RESOLUTIONS[self.aspect_combo.currentText()]
+        cfg.top_n = self.topn_spin.value()
         cfg.crf = QUALITY_PRESETS[self.quality_combo.currentText()]
         cfg.fps = FPS_OPTIONS[self.fps_combo.currentIndex()]
-        cfg.duration = float(self.duration_spin.value())
+        cfg.duration = self._video_duration()
         cfg.title = self.title_edit.text()
+        cfg.title_align = TITLE_ALIGNS[self.title_align_combo.currentText()]
+        cfg.title_font_size = self.title_size_spin.value()
+        cfg.title_color = self.title_color_btn.rgb
+        cfg.title_top_margin = self.title_margin_spin.value()
         cfg.bg_mode = BG_MODES[self.bg_mode_combo.currentText()]
-        cfg.bg_color = self.bg_color_btn.rgb
-        cfg.bg_color2 = self.bg_color2_btn.rgb
         cfg.bg_image = getattr(self, "_bg_image_path", "")
         cfg.bg_blur = self.blur_slider.value()
         cfg.bg_dim = self.dim_slider.value()
-        cfg.bar_color = self.bar_color_btn.rgb
-        cfg.tile_image = getattr(self, "_tile_path", "")
-        cfg.tile_radius = self.radius_slider.value()
-        cfg.tile_opacity = self.opacity_slider.value()
-        cfg.tint_enabled = self.tint_check.isChecked()
-        cfg.tint_color = self.tint_color_btn.rgb
         cfg.shadow_enabled = self.shadow_check.isChecked()
         cfg.avatar_shape = AVATAR_SHAPES[self.avatar_combo.currentText()]
+        cfg.avatar_size = self.avatar_size_spin.value()
+        cfg.avatar_border_radius = self.avatar_radius_slider.value() / 100.0
+        cfg.avatar_border_color = self.avatar_border_color_btn.rgb
+        cfg.avatar_border_size = self.avatar_border_size_slider.value() / 100.0
         cfg.show_badges = self.badge_check.isChecked()
         cfg.badge_shape = BADGE_SHAPES[self.badge_shape_combo.currentText()]
         cfg.badge_color = self.badge_color_btn.rgb
+        cfg.badge_size = self.badge_size_spin.value()
         cfg.rank_color = self.rank_color_btn.rgb
         cfg.rank_font_size = self.rank_size_spin.value()
+        cfg.name_font_size = self.name_size_spin.value()
+        cfg.name_color = self.name_color_btn.rgb
+        cfg.value_font_size = self.value_size_spin.value()
+        cfg.text_font_size = self.text_size_spin.value()
+        cfg.text_color = self.text_color_btn.rgb
+        cfg.extra_font_size = self.extra_size_spin.value()
+        cfg.extra_color = self.extra_color_btn.rgb
         cfg.audio_file = getattr(self, "_audio_path", "")
         cfg.audio_volume = self.volume_slider.value()
         cfg.speed = self.speed_spin.value()
         cfg.easing = EASING_OPTIONS[self.easing_combo.currentText()]
-        cfg.camera_mode = "incline" if self.camera_combo.currentIndex() == 1 else "flat"
-        cfg.camera_move = ["pan", "static", "push", "follow"][
-            self.cammove_combo.currentIndex()]
-        cfg.cam_height = self.camh_slider.value() / 10.0
+        cfg.cam_elevation = self.cam_elev_slider.value() / 10.0
+        cfg.cam_distance = self.cam_dist_slider.value() / 10.0
+        cfg.cam_look_ahead = self.cam_ahead_slider.value() / 10.0
+        cfg.cam_focus_offset = self.cam_focus_slider.value() / 10.0
         cfg.cam_side = self.cams_slider.value() / 10.0
         cfg.cam_fov = self.fov_slider.value() / 100.0
         cfg.value_prefix = self.vpre_edit.text()
         cfg.value_suffix = self.vsu_edit.text()
         cfg.value_decimals = self.vdec_spin.value()
+        cfg.tower_color = self.tower_color_btn.rgb
+        cfg.plate_color = self.plate_color_btn.rgb
+        cfg.value_color = self.value_color_btn.rgb
+        cfg.sky_top = self.skytop_color_btn.rgb
+        cfg.sky_bottom = self.skybot_color_btn.rgb
+        cfg.encode_preset = ENCODE_PRESETS[self.preset_combo.currentIndex()]
         return cfg
+
+    # ------------------------------------------------------------ templates
+    def capture_template(self):
+        """Snapshot every customization control (everything but the data table)."""
+        return {
+            "top_n": self.topn_spin.value(),
+            "aspect": self.aspect_combo.currentText(),
+            "quality": self.quality_combo.currentText(),
+            "fps": self.fps_combo.currentText(),
+            "preset": self.preset_combo.currentText(),
+            "speed": self.speed_spin.value(),
+            "title": self.title_edit.text(),
+            "title_align": self.title_align_combo.currentText(),
+            "title_size": self.title_size_spin.value(),
+            "title_color": list(self.title_color_btn.rgb),
+            "title_margin": self.title_margin_spin.value(),
+            "bg_mode": self.bg_mode_combo.currentText(),
+            "bg_blur": self.blur_slider.value(),
+            "bg_dim": self.dim_slider.value(),
+            "bg_image": getattr(self, "_bg_image_path", ""),
+            "show_badges": self.badge_check.isChecked(),
+            "badge_shape": self.badge_shape_combo.currentText(),
+            "badge_color": list(self.badge_color_btn.rgb),
+            "badge_size": self.badge_size_spin.value(),
+            "shadow": self.shadow_check.isChecked(),
+            "avatar_shape": self.avatar_combo.currentText(),
+            "avatar_size": self.avatar_size_spin.value(),
+            "avatar_radius": self.avatar_radius_slider.value(),
+            "avatar_border_color": list(self.avatar_border_color_btn.rgb),
+            "avatar_border_size": self.avatar_border_size_slider.value(),
+            "audio_file": getattr(self, "_audio_path", ""),
+            "audio_volume": self.volume_slider.value(),
+            "easing": self.easing_combo.currentText(),
+            "cam_elev": self.cam_elev_slider.value(),
+            "cam_dist": self.cam_dist_slider.value(),
+            "cam_side": self.cams_slider.value(),
+            "cam_ahead": self.cam_ahead_slider.value(),
+            "cam_focus": self.cam_focus_slider.value(),
+            "fov": self.fov_slider.value(),
+            "tower_color": list(self.tower_color_btn.rgb),
+            "plate_color": list(self.plate_color_btn.rgb),
+            "value_prefix": self.vpre_edit.text(),
+            "value_suffix": self.vsu_edit.text(),
+            "value_decimals": self.vdec_spin.value(),
+            "sky_top": list(self.skytop_color_btn.rgb),
+            "sky_bottom": list(self.skybot_color_btn.rgb),
+            "rank_size": self.rank_size_spin.value(),
+            "rank_color": list(self.rank_color_btn.rgb),
+            "name_size": self.name_size_spin.value(),
+            "name_color": list(self.name_color_btn.rgb),
+            "value_size": self.value_size_spin.value(),
+            "value_color": list(self.value_color_btn.rgb),
+            "text_size": self.text_size_spin.value(),
+            "text_color": list(self.text_color_btn.rgb),
+            "extra_size": self.extra_size_spin.value(),
+            "extra_color": list(self.extra_color_btn.rgb),
+        }
+
+    def apply_template(self, data):
+        """Restore a captured template onto the controls, then refresh once."""
+        d = data or {}
+        self._applying_template = True
+        try:
+            def combo(c, key):
+                if key in d:
+                    i = c.findText(str(d[key]))
+                    if i >= 0:
+                        c.setCurrentIndex(i)
+
+            def num(w, key):
+                if key in d:
+                    v = float(d[key])
+                    w.setValue(v if isinstance(w, QDoubleSpinBox)
+                               else int(round(v)))
+
+            def text(w, key):
+                if key in d:
+                    w.setText(str(d[key]))
+
+            def check(w, key):
+                if key in d:
+                    w.setChecked(bool(d[key]))
+
+            def color(btn, key):
+                if key in d and isinstance(d[key], (list, tuple)) \
+                        and len(d[key]) == 3:
+                    btn.rgb = tuple(float(x) for x in d[key])
+                    btn._repaint()
+
+            num(self.topn_spin, "top_n")
+            combo(self.aspect_combo, "aspect")
+            combo(self.quality_combo, "quality")
+            combo(self.fps_combo, "fps")
+            combo(self.preset_combo, "preset")
+            num(self.speed_spin, "speed")
+            text(self.title_edit, "title")
+            combo(self.title_align_combo, "title_align")
+            num(self.title_size_spin, "title_size")
+            color(self.title_color_btn, "title_color")
+            num(self.title_margin_spin, "title_margin")
+            combo(self.bg_mode_combo, "bg_mode")
+            num(self.blur_slider, "bg_blur")
+            num(self.dim_slider, "bg_dim")
+            check(self.badge_check, "show_badges")
+            combo(self.badge_shape_combo, "badge_shape")
+            color(self.badge_color_btn, "badge_color")
+            num(self.badge_size_spin, "badge_size")
+            check(self.shadow_check, "shadow")
+            combo(self.avatar_combo, "avatar_shape")
+            num(self.avatar_size_spin, "avatar_size")
+            num(self.avatar_radius_slider, "avatar_radius")
+            color(self.avatar_border_color_btn, "avatar_border_color")
+            num(self.avatar_border_size_slider, "avatar_border_size")
+            num(self.volume_slider, "audio_volume")
+            combo(self.easing_combo, "easing")
+            num(self.cam_elev_slider, "cam_elev")
+            num(self.cam_dist_slider, "cam_dist")
+            num(self.cams_slider, "cam_side")
+            num(self.cam_ahead_slider, "cam_ahead")
+            num(self.cam_focus_slider, "cam_focus")
+            num(self.fov_slider, "fov")
+            color(self.tower_color_btn, "tower_color")
+            color(self.plate_color_btn, "plate_color")
+            text(self.vpre_edit, "value_prefix")
+            text(self.vsu_edit, "value_suffix")
+            num(self.vdec_spin, "value_decimals")
+            color(self.skytop_color_btn, "sky_top")
+            color(self.skybot_color_btn, "sky_bottom")
+            num(self.rank_size_spin, "rank_size")
+            color(self.rank_color_btn, "rank_color")
+            num(self.name_size_spin, "name_size")
+            color(self.name_color_btn, "name_color")
+            num(self.value_size_spin, "value_size")
+            color(self.value_color_btn, "value_color")
+            num(self.text_size_spin, "text_size")
+            color(self.text_color_btn, "text_color")
+            num(self.extra_size_spin, "extra_size")
+            color(self.extra_color_btn, "extra_color")
+
+            if "bg_image" in d:
+                self._bg_image_path = str(d["bg_image"])
+                has = bool(self._bg_image_path)
+                self.bg_image_label.setText(
+                    os.path.basename(self._bg_image_path) if has else "none")
+                self.bg_remove_btn.setEnabled(has)
+            if "audio_file" in d:
+                self._audio_path = str(d["audio_file"])
+                has = bool(self._audio_path)
+                self.audio_label.setText(
+                    os.path.basename(self._audio_path) if has else "none")
+                self.audio_remove_btn.setEnabled(has)
+        finally:
+            self._applying_template = False
+        self.assets_sig = None
+        self.update_preview()
+
+    def _save_template(self):
+        name, ok = QInputDialog.getText(
+            self, "Save Template", "Template name:", text="")
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        if name.startswith("_"):
+            name = "tpl" + name
+        if store.template_exists(name):
+            ans = QMessageBox.question(
+                self, "Overwrite template",
+                f"A template named '{name}' already exists.\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        store.save_template(name, self.capture_template())
+        QMessageBox.information(
+            self, "Template saved",
+            f"Saved template '{name}'.\nFind it any time under Templates → "
+            "Browse / Apply Templates.")
+
+    def _browse_templates(self):
+        from ui.template_manager import TemplateManager
+        dlg = TemplateManager(self, capture_fn=self.capture_template)
+        if dlg.exec() == QDialog.DialogCode.Accepted and dlg.chosen:
+            action, name = dlg.chosen
+            if action == "apply":
+                self.apply_template(store.load_template(name))
 
     # -------------------------------------------------------------- preview
     def _on_setting_changed(self, *_args):
+        if getattr(self, "_applying_template", False):
+            return
         self.update_preview()
 
     def _on_scrub(self, value):
@@ -506,7 +917,7 @@ class MainWindow(QWidget):
         self.play_timer.start()
 
     def _play_tick(self):
-        cfg_duration = max(1.0, float(self.duration_spin.value()))
+        cfg_duration = max(1.0, self._video_duration())
         step = 1000.0 * 0.033 / cfg_duration
         val = self.scrubber.value() + step
         if val >= 1000:
@@ -522,8 +933,10 @@ class MainWindow(QWidget):
         path, _ = QFileDialog.getOpenFileName(
             self, "Import dataset", "",
             "Data files (*.csv *.xlsx *.xls);;All files (*)")
-        if not path:
-            return
+        if path:
+            self._load_dataset_path(path)
+
+    def _load_dataset_path(self, path):
         try:
             df = load_dataset(path)
         except Exception as e:
@@ -532,7 +945,23 @@ class MainWindow(QWidget):
         self.df = df
         self.assets_sig = None
         self.file_label.setText(f"{os.path.basename(path)} ({len(df)} items)")
+        self.topn_spin.setMaximum(max(1, len(df)))
+        self.topn_spin.setValue(len(df))
         self.update_preview()
+
+    def _edit_data_table(self):
+        from ui.table_editor import DatasetTableEditor
+        dlg = DatasetTableEditor(self.df, self)
+        if dlg.exec() == QDialog.DialogCode.Accepted:
+            df = dlg.result_df()
+            if df is None or len(df) == 0:
+                return
+            self.df = df
+            self.assets_sig = None
+            self.file_label.setText(f"Edited dataset ({len(df)} items)")
+            self.topn_spin.setMaximum(max(1, len(df)))
+            self.topn_spin.setValue(len(df))
+            self.update_preview()
 
     def _pick_bg_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -540,16 +969,16 @@ class MainWindow(QWidget):
         if path:
             self._bg_image_path = path
             self.bg_image_label.setText(os.path.basename(path))
-            self.bg_mode_combo.setCurrentIndex(2)
+            self.bg_remove_btn.setEnabled(True)
+            self.bg_mode_combo.setCurrentIndex(1)
             self.update_preview()
 
-    def _pick_tile(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Custom tile image", "", "Images (*.png *.jpg *.jpeg)")
-        if path:
-            self._tile_path = path
-            self.tile_label.setText(os.path.basename(path))
-            self.update_preview()
+    def _remove_bg_image(self):
+        self._bg_image_path = ""
+        self.bg_image_label.setText("none")
+        self.bg_remove_btn.setEnabled(False)
+        self.bg_mode_combo.setCurrentIndex(0)
+        self.update_preview()
 
     def _pick_audio(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -558,10 +987,83 @@ class MainWindow(QWidget):
         if path:
             self._audio_path = path
             self.audio_label.setText(os.path.basename(path))
+            self.audio_remove_btn.setEnabled(True)
+
+    def _remove_audio(self):
+        self._audio_path = ""
+        self.audio_label.setText("none")
+        self.audio_remove_btn.setEnabled(False)
+
+    # ----------------------------------------------------------- drag/drop
+    def _drop_urls(self, event):
+        urls = []
+        if event.mimeData().hasUrls():
+            urls = [u.toLocalFile() for u in event.mimeData().urls()
+                    if u.toLocalFile()]
+        return urls
+
+    def dragEnterEvent(self, event):
+        if self._drop_urls(event):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event):
+        for path in self._drop_urls(event):
+            ext = os.path.splitext(path)[1].lower()
+            if ext in (".csv", ".xlsx", ".xls"):
+                self._load_dataset_path(path)
+            elif ext in (".png", ".jpg", ".jpeg"):
+                self._bg_image_path = path
+                self.bg_image_label.setText(os.path.basename(path))
+                self.bg_remove_btn.setEnabled(True)
+                self.bg_mode_combo.setCurrentIndex(1)
+                self.update_preview()
+            elif ext in (".mp3", ".wav", ".aac", ".m4a"):
+                self._audio_path = path
+                self.audio_label.setText(os.path.basename(path))
+                self.audio_remove_btn.setEnabled(True)
+            else:
+                QMessageBox.warning(
+                    self, "Unsupported file",
+                    f"Cannot use '{os.path.basename(path)}'.\nDrop a CSV/Excel "
+                    "dataset, a PNG/JPG background, or an audio file.")
+        event.acceptProposedAction()
 
     # -------------------------------------------------------------- export
     def set_export_enabled(self, enabled):
         self.export_btn.setEnabled(enabled)
+
+    def _save_frame_png(self):
+        if self.df is None or len(self.df) == 0:
+            QMessageBox.warning(self, "No data",
+                                "Please import a dataset first.")
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save frame as PNG", "ranking_frame.png", "PNG (*.png)")
+        if not path:
+            return
+        if not path.lower().endswith(".png"):
+            path += ".png"
+        try:
+            cfg = self.collect_config()
+            sig = cfg.asset_signature()
+            if self.assets is None or sig != self.assets_sig:
+                self.assets = build_assets(cfg, self.df)
+                self.assets_sig = sig
+            surface = cairo.ImageSurface(cairo.FORMAT_ARGB32,
+                                         cfg.width, cfg.height)
+            ctx = cairo.Context(surface)
+            ctx.set_operator(cairo.OPERATOR_SOURCE)
+            render_frame(ctx, cfg, self.df, self.assets,
+                         self.scrubber.value() / 1000.0)
+            surface.flush()
+            surface.write_to_png(path)
+        except Exception as e:
+            QMessageBox.critical(self, "Save failed", str(e))
+            return
+        QMessageBox.information(self, "Frame saved",
+                                f"Still image saved to:\n{path}")
 
     def _start_export(self):
         if self.df is None or len(self.df) == 0:

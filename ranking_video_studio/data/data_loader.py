@@ -26,6 +26,9 @@ def load_dataset(path):
         raise ValueError(f"Could not read file: {e}")
 
     df.columns = [str(c).strip().lower() for c in df.columns]
+    df = df.rename(columns={"extra text": "extratext", "extra_text": "extratext"})
+    if "score" not in df.columns and "value" in df.columns:
+        df = df.rename(columns={"value": "score"})
     if "name" not in df.columns or "score" not in df.columns:
         raise ValueError(
             "Missing required columns: 'name' and 'score'.\n"
@@ -36,16 +39,19 @@ def load_dataset(path):
     df = df.dropna(subset=["score"])
     if len(df) == 0:
         raise ValueError("No rows with a valid numeric 'score' found.")
-    df["name"] = df["name"].astype(str)
+    df["name"] = df["name"].fillna("").astype(str)
     if "text" not in df.columns:
         df["text"] = ""
     if "image" not in df.columns:
         df["image"] = ""
     if "flag" not in df.columns:
         df["flag"] = ""
+    if "extratext" not in df.columns:
+        df["extratext"] = ""
     df["text"] = df["text"].fillna("").astype(str)
     df["image"] = df["image"].fillna("").astype(str)
     df["flag"] = df["flag"].fillna("").astype(str)
+    df["extratext"] = df["extratext"].fillna("").astype(str)
 
     df = df.sort_values("score", ascending=False).head(MAX_ROWS).reset_index(drop=True)
     return df

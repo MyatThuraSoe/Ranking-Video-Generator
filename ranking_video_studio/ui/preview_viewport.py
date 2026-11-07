@@ -14,7 +14,7 @@ class PreviewViewport(QLabel):
         self.setMinimumSize(320, 320)
         self._image = None
         self.setText("Preview")
-        self.setStyleSheet("background-color: #14141f; border-radius: 8px;")
+        self.setObjectName("previewViewport")
 
     def set_frame(self, qimage: QImage):
         self._image = qimage

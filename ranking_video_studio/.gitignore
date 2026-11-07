@@ -1,0 +1,8 @@
+# Local user data — never commit personal projects, settings or templates
+states/
+templates/
+app_settings.json
+
+# Python cache
+__pycache__/
+*.py[cod]

@@ -10,4 +10,5 @@ def get_demo_data():
             "Systems Programming", "Cloud Native", "Enterprise Backbone",
         ],
         "image": ["", "", "", "", "", ""],
+        "extratext": ["", "", "", "", "", ""],
     })

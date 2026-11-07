@@ -28,11 +28,6 @@ def _surface_from_pil(img):
     return surface
 
 
-def _rounded_mask(size, radius):
-    mask = Image.new("L", size, 0)
-    d = ImageDraw.Draw(mask)
-    d.rounded_rectangle([0, 0, size[0] - 1, size[1] - 1], radius=radius, fill=255)
-    return mask
 
 
 def process_background_image(path, w, h, blur, dim):
@@ -47,53 +42,50 @@ def process_background_image(path, w, h, blur, dim):
     return _surface_from_pil(img)
 
 
-def process_tile_image(path, bar_h, radius, opacity, tint_enabled, tint_color):
-    """Prepare a custom tile PNG scaled to bar height.
+def process_avatar_image(path, size, shape, radius=0.0,
+                         border_color=(1.0, 1.0, 1.0), border_size=0.0):
+    """Center-crop to square, mask to shape, optionally ring it with a border.
 
-    Returns (cairo_surface, (w, h)) or (None, (0, 0)) on failure.
+    radius is corner rounding as a fraction of half-size (square/rounded);
+    border_size is ring thickness as a fraction of half-size. Returns surface.
     """
-    try:
-        img = Image.open(path).convert("RGBA")
-    except Exception:
-        return None, (0, 0)
-    ratio = bar_h / max(1, img.height)
-    tw = max(1, int(img.width * ratio))
-    img = img.resize((tw, bar_h), Image.Resampling.LANCZOS)
-
-    if radius > 0:
-        img.putalpha(_rounded_mask((tw, bar_h), min(radius, bar_h // 2)))
-
-    if tint_enabled:
-        tint = Image.new("RGBA", (tw, bar_h),
-                         (int(tint_color[0] * 255), int(tint_color[1] * 255),
-                          int(tint_color[2] * 255), 90))
-        img = Image.alpha_composite(img, tint)
-
-    if opacity < 100:
-        alpha = img.getchannel("A").point(lambda p: int(p * opacity / 100))
-        img.putalpha(alpha)
-
-    return _surface_from_pil(img), (tw, bar_h)
-
-
-def process_avatar_image(path, size, shape):
-    """Center-crop to square, apply shape mask. Returns surface or None."""
     try:
         img = Image.open(path).convert("RGBA")
     except Exception:
         return None
     img = ImageOps.fit(img, (size, size), Image.Resampling.LANCZOS)
+
     if shape == "circle":
-        mask = Image.new("L", (size, size), 0)
-        ImageDraw.Draw(mask).ellipse([0, 0, size - 1, size - 1], fill=255)
-        img.putalpha(mask)
-    elif shape == "rounded":
-        img.putalpha(_rounded_mask((size, size), max(2, size // 5)))
-    return _surface_from_pil(img)
+        r_px = size / 2.0
+    else:
+        frac = max(radius, 0.2) if shape == "rounded" else radius
+        r_px = max(0.0, min(frac, 1.0)) * size * 0.5
+    b_px = int(round(max(0.0, min(border_size, 0.45)) * size * 0.5))
 
+    def shape_mask(inset, rad):
+        m = Image.new("L", (size, size), 0)
+        d = ImageDraw.Draw(m)
+        box = [inset, inset, size - 1 - inset, size - 1 - inset]
+        rad = max(0.0, min(rad, (size - 1 - 2 * inset) / 2.0))
+        if shape == "circle":
+            d.ellipse(box, fill=255)
+        elif rad <= 0.5:
+            d.rectangle(box, fill=255)
+        else:
+            d.rounded_rectangle(box, radius=int(rad), fill=255)
+        return m
 
-def pil_surface(img):
-    """Public helper: PIL RGBA image -> premultiplied Cairo surface."""
+    outer = shape_mask(0, r_px)
+    if b_px > 0:
+        inner = shape_mask(b_px, r_px - b_px)
+        ring = Image.new("RGBA", (size, size),
+                         tuple(int(c * 255) for c in border_color) + (255,))
+        ring.putalpha(outer)
+        img.putalpha(inner)
+        ring.alpha_composite(img)
+        img = ring
+    else:
+        img.putalpha(outer)
     return _surface_from_pil(img)
 
 

@@ -6,14 +6,15 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from PyQt6.QtWidgets import QApplication, QMessageBox
 
 from ui.main_window import MainWindow
-from ui.styles import DARK_QSS
+from ui.styles import apply_theme
+from data.state_store import get_theme
 from utils.ffmpeg_check import ffmpeg_available
 
 
 def main():
     app = QApplication(sys.argv)
     app.setApplicationName("Ranking Video Studio")
-    app.setStyleSheet(DARK_QSS)
+    apply_theme(app, get_theme())
 
     window = MainWindow()
     if not ffmpeg_available():
