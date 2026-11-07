@@ -2,7 +2,7 @@
 saved templates without re-selecting every control. Rename/delete stay here;
 applying returns the chosen name to the caller."""
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
@@ -43,10 +43,7 @@ class TemplateManager(QDialog):
 
         head = QHBoxLayout()
         title = QLabel("Templates")
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        title.setFont(f)
+        title.setObjectName("pageTitle")
         head.addWidget(title)
         head.addStretch(1)
         self.total_label = QLabel()

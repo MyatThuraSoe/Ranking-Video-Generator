@@ -1,5 +1,9 @@
+import os
 import shutil
+
+from utils.app_paths import ffmpeg_path
 
 
 def ffmpeg_available():
-    return shutil.which("ffmpeg") is not None
+    path = ffmpeg_path()
+    return os.path.isfile(path) or shutil.which("ffmpeg") is not None

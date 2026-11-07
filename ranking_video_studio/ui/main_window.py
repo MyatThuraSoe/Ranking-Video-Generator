@@ -5,9 +5,9 @@ from PyQt6.QtCore import Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QAction, QActionGroup, QColor, QImage
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox,
-    QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel, QLineEdit,
-    QMenuBar, QMessageBox, QProgressBar, QPushButton, QScrollArea, QSlider,
-    QSpinBox, QSplitter, QVBoxLayout, QWidget,
+    QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
+    QLineEdit, QMenuBar, QMessageBox, QProgressBar, QPushButton, QScrollArea,
+    QSizePolicy, QSlider, QSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget,
 )
 
 from core.export_worker import VideoExportThread
@@ -17,10 +17,11 @@ from data.demo_data import get_demo_data
 from data import state_store as store
 from data.state_store import get_theme, set_theme
 from ui import styles
+from ui.default_preset import curated_template
 from ui.preview_viewport import PreviewViewport
 from utils.config import (
     BASE_DURATION, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
-    RenderConfig,
+    TOP_N, RenderConfig,
 )
 
 EASING_OPTIONS = {
@@ -45,14 +46,18 @@ class ColorButton(QPushButton):
         super().__init__(parent)
         self.rgb = tuple(rgb)
         self.setObjectName("colorBtn")
-        self.setFixedHeight(30)
-        self.setMinimumWidth(70)
+        self.setFixedHeight(32)
+        self.setMinimumWidth(76)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clicked.connect(self._pick)
         self._repaint()
 
     def _repaint(self):
         r, g, b = [int(c * 255) for c in self.rgb]
-        self.setStyleSheet(f"background-color: rgb({r},{g},{b});")
+        border = styles.current_palette()["border_input"]
+        self.setStyleSheet(
+            f"background-color: rgb({r},{g},{b});"
+            f"border: 1px solid {border}; border-radius: 8px;")
 
     def _pick(self):
         r, g, b = [int(c * 255) for c in self.rgb]
@@ -73,6 +78,44 @@ def _row(*widgets, stretch_last=True):
     return lay
 
 
+def _field_row(label, *controls):
+    """A settings row with a fixed-width caption so controls line up."""
+    lay = QHBoxLayout()
+    lay.setSpacing(8)
+    cap = QLabel(label)
+    cap.setObjectName("fieldLabel")
+    cap.setFixedWidth(124)
+    lay.addWidget(cap)
+    expands = bool(controls) and isinstance(
+        controls[0], (QComboBox, QLineEdit, QSlider))
+    for i, w in enumerate(controls):
+        lay.addWidget(w, 1 if (expands and i == 0) else 0)
+    if not expands:
+        lay.addStretch(1)
+    return lay
+
+
+def _mini_label(text):
+    lbl = QLabel(text)
+    lbl.setObjectName("miniLabel")
+    return lbl
+
+
+def _value_label(text, width=172):
+    lbl = QLabel(text)
+    lbl.setObjectName("valueLabel")
+    lbl.setMinimumWidth(width)
+    return lbl
+
+
+def _slider_row(label, slider):
+    lay = QHBoxLayout()
+    lay.setSpacing(10)
+    lay.addWidget(label)
+    lay.addWidget(slider, 1)
+    return lay
+
+
 def _font_spin(value, tip):
     sp = QDoubleSpinBox()
     sp.setRange(0.08, 1.20)
@@ -86,7 +129,7 @@ def _font_spin(value, tip):
 class MainWindow(QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Ranking Video Studio (2K Max)")
+        self.setWindowTitle("LRBar-RankGen")
         self.resize(1400, 900)
         self.setAcceptDrops(True)
 
@@ -102,7 +145,9 @@ class MainWindow(QWidget):
 
         self._build_ui()
         self._connect_signals()
-        self.update_preview()
+        # Start on the curated "hook" look so the first thing a new user sees
+        # is a finished, upload-ready style rather than neutral defaults.
+        self.apply_template(curated_template(len(self.df)))
 
     # ------------------------------------------------------------- menu bar
     def _build_menu_bar(self):
@@ -126,6 +171,9 @@ class MainWindow(QWidget):
         act.triggered.connect(self._save_template)
         act = tpl_menu.addAction("Browse / Apply Templates…")
         act.triggered.connect(self._browse_templates)
+        tpl_menu.addSeparator()
+        act = tpl_menu.addAction("Reset to Recommended Look")
+        act.triggered.connect(self._reset_to_defaults)
 
         theme_menu = self.menu_bar.addMenu("Theme")
         self._theme_group = QActionGroup(self)
@@ -133,7 +181,7 @@ class MainWindow(QWidget):
         self._theme_actions = {}
         current = get_theme()
         if current not in styles.THEME_NAMES:
-            current = "Dark"
+            current = "Bright"
         for name in styles.THEME_NAMES:
             act = theme_menu.addAction(name)
             act.setCheckable(True)
@@ -149,6 +197,82 @@ class MainWindow(QWidget):
             styles.apply_theme(app, name)
         set_theme(name)
         self._theme_actions[name].setChecked(True)
+        # Color swatches paint their own inline style; refresh their borders.
+        for btn in self.findChildren(ColorButton):
+            btn._repaint()
+        self.viewport.update()
+
+    # ------------------------------------------------------------- app header
+    def _build_app_header(self):
+        header = QWidget()
+        header.setObjectName("appHeader")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(18, 10, 18, 10)
+        hl.setSpacing(12)
+
+        mark = QLabel("LR")
+        mark.setObjectName("logoMark")
+        mark.setFixedSize(38, 38)
+        mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        hl.addWidget(mark)
+
+        titles = QVBoxLayout()
+        titles.setSpacing(1)
+        title = QLabel("LRBar-RankGen")
+        title.setObjectName("appTitle")
+        subtitle = QLabel("Cinematic 3D ranking videos  ·  live preview  ·  2K export")
+        subtitle.setObjectName("appSubtitle")
+        titles.addWidget(title)
+        titles.addWidget(subtitle)
+        hl.addLayout(titles)
+        hl.addStretch(1)
+
+        self.header_import_btn = QPushButton("Import data")
+        self.header_import_btn.setObjectName("headerAction")
+        self.header_import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_import_btn.setToolTip("Load a CSV / Excel dataset")
+        self.header_tpl_btn = QPushButton("Templates")
+        self.header_tpl_btn.setObjectName("headerAction")
+        self.header_tpl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.header_tpl_btn.setToolTip("Save or re-apply a complete visual look")
+        hl.addWidget(self.header_import_btn)
+        hl.addWidget(self.header_tpl_btn)
+        return header
+
+    def _collapsible_group(self, form, title, expanded=False):
+        """Add a click-to-expand section header + body; return the body layout.
+
+        Advanced settings stay collapsed by default so the first view is calm,
+        while every control remains one click away (progressive disclosure).
+        """
+        header = QToolButton()
+        header.setText("  " + title)
+        header.setObjectName("sectionHeader")
+        header.setCheckable(True)
+        header.setChecked(expanded)
+        header.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        header.setArrowType(Qt.ArrowType.DownArrow if expanded
+                            else Qt.ArrowType.RightArrow)
+        header.setSizePolicy(QSizePolicy.Policy.Expanding,
+                             QSizePolicy.Policy.Fixed)
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
+        body = QWidget()
+        body.setObjectName("sectionBody")
+        body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(12, 10, 10, 12)
+        lay.setSpacing(8)
+        body.setVisible(expanded)
+
+        def _toggled(on):
+            body.setVisible(on)
+            header.setArrowType(Qt.ArrowType.DownArrow if on
+                                else Qt.ArrowType.RightArrow)
+
+        header.toggled.connect(_toggled)
+        form.addWidget(header)
+        form.addWidget(body)
+        return lay
 
     # ------------------------------------------------------------------ UI
     def _build_ui(self):
@@ -157,9 +281,11 @@ class MainWindow(QWidget):
         root.setSpacing(0)
         self._build_menu_bar()
         root.addWidget(self.menu_bar)
+        root.addWidget(self._build_app_header())
         body = QWidget()
+        body.setObjectName("appBody")
         body_lay = QHBoxLayout(body)
-        body_lay.setContentsMargins(8, 8, 8, 8)
+        body_lay.setContentsMargins(14, 12, 14, 14)
         splitter = QSplitter(Qt.Orientation.Horizontal)
         body_lay.addWidget(splitter)
         root.addWidget(body, 1)
@@ -168,26 +294,16 @@ class MainWindow(QWidget):
         left_holder = QWidget()
         left = QVBoxLayout(left_holder)
         left.setContentsMargins(0, 0, 0, 0)
+        left.setSpacing(12)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setHorizontalScrollBarPolicy(
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         inner = QWidget()
-        inner.setFixedWidth(470)
+        inner.setMinimumWidth(420)
         form = QVBoxLayout(inner)
-        form.setSpacing(10)
-
-        # Templates
-        g = QGroupBox("Templates")
-        gl = QVBoxLayout(g)
-        self.save_tpl_btn = QPushButton("Save Current as Template")
-        self.save_tpl_btn.setToolTip("Remember every current setting as a named "
-                                     "template you can re-apply later")
-        self.browse_tpl_btn = QPushButton("Browse / Apply Templates…")
-        self.browse_tpl_btn.setToolTip("Find a saved template and restore its "
-                                       "settings without re-selecting anything")
-        gl.addLayout(_row(self.save_tpl_btn, self.browse_tpl_btn))
-        form.addWidget(g)
+        form.setContentsMargins(0, 0, 6, 0)
+        form.setSpacing(12)
 
         # 1. Dataset
         g = QGroupBox("1. Dataset")
@@ -206,14 +322,14 @@ class MainWindow(QWidget):
         gl.addWidget(self.table_btn)
         self.topn_spin = QSpinBox()
         self.topn_spin.setRange(1, max(1, len(self.df)))
-        self.topn_spin.setValue(len(self.df))
+        self.topn_spin.setValue(min(TOP_N, len(self.df)))
         self.topn_spin.setToolTip("How many ranked items to render "
                                   "(defaults to the full dataset; lower it to show fewer)")
-        gl.addLayout(_row(QLabel("Items to show:"), self.topn_spin))
+        gl.addLayout(_field_row("Items to show", self.topn_spin))
         form.addWidget(g)
 
         # 2. Resolution & Quality
-        g = QGroupBox("2. Resolution & Quality")
+        g = QGroupBox("2. Resolution && Quality")
         gl = QVBoxLayout(g)
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(RESOLUTIONS.keys())
@@ -241,16 +357,16 @@ class MainWindow(QWidget):
             f"(duration = {BASE_DURATION:.0f}s / speed)")
         self.duration_label = QLabel(f"{BASE_DURATION:.1f} s")
         self.duration_label.setToolTip("Resulting video duration")
-        gl.addLayout(_row(QLabel("Aspect / Resolution:"), self.aspect_combo))
-        gl.addLayout(_row(QLabel("Quality:"), self.quality_combo))
-        gl.addLayout(_row(QLabel("Frame rate:"), self.fps_combo))
-        gl.addLayout(_row(QLabel("Encode preset:"), self.preset_combo))
-        gl.addLayout(_row(QLabel("Camera speed:"), self.speed_spin,
-                          self.duration_label))
+        gl.addLayout(_field_row("Aspect / Resolution", self.aspect_combo))
+        gl.addLayout(_field_row("Quality", self.quality_combo))
+        gl.addLayout(_field_row("Frame rate", self.fps_combo))
+        gl.addLayout(_field_row("Encode preset", self.preset_combo))
+        gl.addLayout(_field_row("Camera speed", self.speed_spin,
+                                self.duration_label))
         form.addWidget(g)
 
         # 3. Background & Canvas
-        g = QGroupBox("3. Background & Canvas")
+        g = QGroupBox("3. Background && Canvas")
         gl = QVBoxLayout(g)
         self.title_edit = QLineEdit("TOP RANKINGS")
         self.title_edit.setToolTip("Video title shown at the top")
@@ -276,7 +392,7 @@ class MainWindow(QWidget):
         self.bg_image_btn = QPushButton("Background image...")
         self.bg_image_btn.setToolTip("PNG/JPG used when mode = Custom Image")
         self.bg_remove_btn = QPushButton("Remove")
-        self.bg_remove_btn.setFixedWidth(70)
+        self.bg_remove_btn.setFixedWidth(86)
         self.bg_remove_btn.setEnabled(False)
         self.bg_remove_btn.setToolTip("Clear the loaded background image")
         self.bg_image_label = QLabel("none")
@@ -285,27 +401,26 @@ class MainWindow(QWidget):
         self.blur_slider.setRange(0, 30)
         self.blur_slider.setValue(10)
         self.blur_slider.setToolTip("Gaussian blur applied to background image")
-        self.blur_label = QLabel("Blur: 10")
+        self.blur_label = _value_label("Blur: 10")
         self.dim_slider = QSlider(Qt.Orientation.Horizontal)
         self.dim_slider.setRange(0, 80)
         self.dim_slider.setValue(40)
         self.dim_slider.setToolTip("Darken background image (0-80%)")
-        self.dim_label = QLabel("Dim: 40%")
-        gl.addLayout(_row(QLabel("Title:"), self.title_edit))
-        gl.addLayout(_row(QLabel("Align:"), self.title_align_combo,
-                          QLabel("Size:"), self.title_size_spin,
-                          self.title_color_btn))
-        gl.addLayout(_row(QLabel("Top margin:"), self.title_margin_spin))
-        gl.addLayout(_row(QLabel("Mode:"), self.bg_mode_combo))
-        gl.addLayout(_row(self.bg_image_btn, self.bg_remove_btn,
-                          self.bg_image_label))
-        gl.addLayout(_row(self.blur_label, self.blur_slider))
-        gl.addLayout(_row(self.dim_label, self.dim_slider))
+        self.dim_label = _value_label("Dim: 40%")
+        gl.addLayout(_field_row("Title", self.title_edit))
+        gl.addLayout(_field_row("Alignment", self.title_align_combo,
+                                _mini_label("Size"), self.title_size_spin,
+                                self.title_color_btn))
+        gl.addLayout(_field_row("Top margin", self.title_margin_spin))
+        gl.addLayout(_field_row("Mode", self.bg_mode_combo))
+        gl.addLayout(_field_row("Backdrop", self.bg_image_btn,
+                                self.bg_remove_btn, self.bg_image_label))
+        gl.addLayout(_slider_row(self.blur_label, self.blur_slider))
+        gl.addLayout(_slider_row(self.dim_label, self.dim_slider))
         form.addWidget(g)
 
         # 4. Ranking Badges
-        g = QGroupBox("4. Ranking Badges")
-        gl = QVBoxLayout(g)
+        gl = self._collapsible_group(form, "Ranking Badges", expanded=False)
         self.badge_check = QCheckBox("Show rank numbers")
         self.badge_check.setChecked(True)
         self.badge_shape_combo = QComboBox()
@@ -321,14 +436,12 @@ class MainWindow(QWidget):
         self.badge_size_spin.setSuffix("x")
         self.badge_size_spin.setToolTip("Scale of the badge background shape")
         gl.addWidget(self.badge_check)
-        gl.addLayout(_row(QLabel("Shape:"), self.badge_shape_combo))
-        gl.addLayout(_row(QLabel("Badge color:"), self.badge_color_btn))
-        gl.addLayout(_row(QLabel("Badge size:"), self.badge_size_spin))
-        form.addWidget(g)
+        gl.addLayout(_field_row("Shape", self.badge_shape_combo))
+        gl.addLayout(_field_row("Badge color", self.badge_color_btn))
+        gl.addLayout(_field_row("Badge size", self.badge_size_spin))
 
         # 5. Avatars & Audio
-        g = QGroupBox("5. Avatars & Audio")
-        gl = QVBoxLayout(g)
+        gl = self._collapsible_group(form, "Avatars && Audio", expanded=False)
         self.shadow_check = QCheckBox("Drop shadow")
         self.shadow_check.setChecked(True)
         self.avatar_combo = QComboBox()
@@ -346,18 +459,18 @@ class MainWindow(QWidget):
         self.avatar_radius_slider.setValue(0)
         self.avatar_radius_slider.setToolTip(
             "Corner rounding for square images (0% sharp, 100% circle)")
-        self.avatar_radius_label = QLabel("Radius: 0%")
+        self.avatar_radius_label = _value_label("Radius: 0%")
         self.avatar_border_color_btn = ColorButton((1.0, 1.0, 1.0))
         self.avatar_border_color_btn.setToolTip("Color of the image border")
         self.avatar_border_size_slider = QSlider(Qt.Orientation.Horizontal)
         self.avatar_border_size_slider.setRange(0, 30)
         self.avatar_border_size_slider.setValue(0)
         self.avatar_border_size_slider.setToolTip("Image border thickness (0 = none)")
-        self.avatar_border_size_label = QLabel("Border: 0%")
+        self.avatar_border_size_label = _value_label("Border: 0%")
         self.audio_btn = QPushButton("Background music...")
         self.audio_btn.setToolTip("MP3/WAV/AAC/M4A, looped and faded out")
         self.audio_remove_btn = QPushButton("Remove")
-        self.audio_remove_btn.setFixedWidth(70)
+        self.audio_remove_btn.setFixedWidth(86)
         self.audio_remove_btn.setEnabled(False)
         self.audio_remove_btn.setToolTip("Clear the loaded background music")
         self.audio_label = QLabel("none")
@@ -366,60 +479,61 @@ class MainWindow(QWidget):
         self.volume_slider.setRange(10, 150)
         self.volume_slider.setValue(100)
         self.volume_slider.setToolTip("Music volume (10-150%)")
-        self.volume_label = QLabel("Volume: 100%")
+        self.volume_label = _value_label("Volume: 100%")
         self.easing_combo = QComboBox()
         self.easing_combo.addItems(EASING_OPTIONS.keys())
         self.easing_combo.setToolTip("Animation easing curve")
         gl.addWidget(self.shadow_check)
-        gl.addLayout(_row(QLabel("Avatar shape:"), self.avatar_combo))
-        gl.addLayout(_row(QLabel("Image size:"), self.avatar_size_spin))
-        gl.addLayout(_row(self.avatar_radius_label, self.avatar_radius_slider))
-        gl.addLayout(_row(QLabel("Border color:"), self.avatar_border_color_btn))
-        gl.addLayout(_row(self.avatar_border_size_label,
-                          self.avatar_border_size_slider))
-        gl.addLayout(_row(self.audio_btn, self.audio_remove_btn,
-                          self.audio_label))
-        gl.addLayout(_row(self.volume_label, self.volume_slider))
-        gl.addLayout(_row(QLabel("Easing:"), self.easing_combo))
-        form.addWidget(g)
+        gl.addLayout(_field_row("Avatar shape", self.avatar_combo))
+        gl.addLayout(_field_row("Image size", self.avatar_size_spin))
+        gl.addLayout(_slider_row(self.avatar_radius_label,
+                                 self.avatar_radius_slider))
+        gl.addLayout(_field_row("Border color",
+                                self.avatar_border_color_btn))
+        gl.addLayout(_slider_row(self.avatar_border_size_label,
+                                 self.avatar_border_size_slider))
+        gl.addLayout(_field_row("Music", self.audio_btn,
+                                self.audio_remove_btn, self.audio_label))
+        gl.addLayout(_slider_row(self.volume_label, self.volume_slider))
+        gl.addLayout(_field_row("Easing", self.easing_combo))
 
         # 6. Camera & Scene (Incline 3D Towers)
-        g = QGroupBox("6. Camera & Scene (Incline 3D Towers)")
-        gl = QVBoxLayout(g)
+        gl = self._collapsible_group(
+            form, "Camera && Scene (Incline 3D Towers)", expanded=False)
         self.cam_elev_slider = QSlider(Qt.Orientation.Horizontal)
         self.cam_elev_slider.setRange(10, 80)
         self.cam_elev_slider.setValue(35)
         self.cam_elev_slider.setToolTip(
             "How high the camera flies ABOVE the tracked tower top (1.0-8.0)")
-        self.cam_elev_label = QLabel("Camera Elevation: 3.5")
+        self.cam_elev_label = _value_label("Camera Elevation: 3.5")
         self.cam_dist_slider = QSlider(Qt.Orientation.Horizontal)
         self.cam_dist_slider.setRange(150, 500)
         self.cam_dist_slider.setValue(260)
         self.cam_dist_slider.setToolTip(
             "How far back the camera sits from the row (15.0-50.0)")
-        self.cam_dist_label = QLabel("Camera Distance: 26.0")
+        self.cam_dist_label = _value_label("Camera Distance: 26.0")
         self.cam_ahead_slider = QSlider(Qt.Orientation.Horizontal)
         self.cam_ahead_slider.setRange(0, 100)
         self.cam_ahead_slider.setValue(12)
         self.cam_ahead_slider.setToolTip(
             "Aim ahead toward incoming towers; 0 looks back along the row (0.0-10.0)")
-        self.cam_ahead_label = QLabel("Look-Ahead: 1.2")
+        self.cam_ahead_label = _value_label("Look-Ahead: 1.2")
         self.cam_focus_slider = QSlider(Qt.Orientation.Horizontal)
         self.cam_focus_slider.setRange(-10, 20)
         self.cam_focus_slider.setValue(5)
         self.cam_focus_slider.setToolTip(
             "Look-at height above the tower top; raise to frame logos (-1.0-2.0)")
-        self.cam_focus_label = QLabel("Focus Offset: 0.5")
+        self.cam_focus_label = _value_label("Focus Offset: 0.5")
         self.cams_slider = QSlider(Qt.Orientation.Horizontal)
         self.cams_slider.setRange(0, 120)
         self.cams_slider.setValue(19)
         self.cams_slider.setToolTip("Lateral offset = incline angle (0.0-12.0)")
-        self.cams_label = QLabel("Incline Angle: 1.9")
+        self.cams_label = _value_label("Incline Angle: 1.9")
         self.fov_slider = QSlider(Qt.Orientation.Horizontal)
         self.fov_slider.setRange(60, 180)
         self.fov_slider.setValue(105)
         self.fov_slider.setToolTip("Zoom / field of view (0.6-1.8)")
-        self.fov_label = QLabel("Zoom / FOV: 1.05")
+        self.fov_label = _value_label("Zoom / FOV: 1.05")
         self.tower_color_btn = ColorButton((0.80, 0.76, 0.64))
         self.tower_color_btn.setToolTip("Tower face color")
         self.plate_color_btn = ColorButton((0.24, 0.13, 0.12))
@@ -436,24 +550,23 @@ class MainWindow(QWidget):
         self.vdec_spin.setRange(0, 3)
         self.vdec_spin.setValue(1)
         self.vdec_spin.setToolTip("Decimal places of the tower value")
-        gl.addLayout(_row(self.cam_elev_label, self.cam_elev_slider))
-        gl.addLayout(_row(self.cam_dist_label, self.cam_dist_slider))
-        gl.addLayout(_row(self.cam_ahead_label, self.cam_ahead_slider))
-        gl.addLayout(_row(self.cam_focus_label, self.cam_focus_slider))
-        gl.addLayout(_row(self.cams_label, self.cams_slider))
-        gl.addLayout(_row(self.fov_label, self.fov_slider))
-        gl.addLayout(_row(QLabel("Tower:"), self.tower_color_btn,
-                          QLabel("Plate:"), self.plate_color_btn))
-        gl.addLayout(_row(QLabel("Sky top:"), self.skytop_color_btn,
-                          QLabel("Sky bottom:"), self.skybot_color_btn))
-        gl.addLayout(_row(QLabel("Value Prefix:"), self.vpre_edit,
-                          QLabel("Suffix:"), self.vsu_edit))
-        gl.addLayout(_row(QLabel("Value Decimals:"), self.vdec_spin))
-        form.addWidget(g)
+        gl.addLayout(_slider_row(self.cam_elev_label, self.cam_elev_slider))
+        gl.addLayout(_slider_row(self.cam_dist_label, self.cam_dist_slider))
+        gl.addLayout(_slider_row(self.cam_ahead_label, self.cam_ahead_slider))
+        gl.addLayout(_slider_row(self.cam_focus_label, self.cam_focus_slider))
+        gl.addLayout(_slider_row(self.cams_label, self.cams_slider))
+        gl.addLayout(_slider_row(self.fov_label, self.fov_slider))
+        gl.addLayout(_field_row("Tower", self.tower_color_btn,
+                                _mini_label("Plate"), self.plate_color_btn))
+        gl.addLayout(_field_row("Sky top", self.skytop_color_btn,
+                                _mini_label("Sky bottom"),
+                                self.skybot_color_btn))
+        gl.addLayout(_field_row("Value Prefix", self.vpre_edit,
+                                _mini_label("Suffix"), self.vsu_edit))
+        gl.addLayout(_field_row("Value Decimals", self.vdec_spin))
 
         # 7. Typography & Colors
-        g = QGroupBox("7. Typography & Colors")
-        gl = QVBoxLayout(g)
+        gl = self._collapsible_group(form, "Typography && Colors", expanded=False)
         self.rank_size_spin = QSpinBox()
         self.rank_size_spin.setRange(16, 48)
         self.rank_size_spin.setValue(28)
@@ -472,78 +585,127 @@ class MainWindow(QWidget):
         self.extra_size_spin = _font_spin(0.18, "Extra text font size (world units)")
         self.extra_color_btn = ColorButton((0.80, 0.82, 0.85))
         self.extra_color_btn.setToolTip("Extra text color")
-        gl.addLayout(_row(QLabel("Rank number:"), self.rank_size_spin,
-                          self.rank_color_btn))
-        gl.addLayout(_row(QLabel("Name:"), self.name_size_spin,
-                          self.name_color_btn))
-        gl.addLayout(_row(QLabel("Value:"), self.value_size_spin,
-                          self.value_color_btn))
-        gl.addLayout(_row(QLabel("Text:"), self.text_size_spin,
-                          self.text_color_btn))
-        gl.addLayout(_row(QLabel("Extra text:"), self.extra_size_spin,
-                          self.extra_color_btn))
-        form.addWidget(g)
+        gl.addLayout(_field_row("Rank number", self.rank_size_spin,
+                                self.rank_color_btn))
+        gl.addLayout(_field_row("Name", self.name_size_spin,
+                                self.name_color_btn))
+        gl.addLayout(_field_row("Value", self.value_size_spin,
+                                self.value_color_btn))
+        gl.addLayout(_field_row("Text", self.text_size_spin,
+                                self.text_color_btn))
+        gl.addLayout(_field_row("Extra text", self.extra_size_spin,
+                                self.extra_color_btn))
 
         # Export
         g = QGroupBox("Export")
+        g.setObjectName("exportCard")
         gl = QVBoxLayout(g)
+        gl.setContentsMargins(0, 0, 0, 0)
+        gl.setSpacing(8)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
+        self.progress_bar.setMaximumHeight(16)
         self.export_btn = QPushButton("Export Video to MP4")
         self.export_btn.setObjectName("exportBtn")
-        self.frame_btn = QPushButton("Save Current Frame as PNG")
+        self.frame_btn = QPushButton("Save Frame as PNG")
         self.frame_btn.setToolTip("Export the previewed frame as a still image")
-        self.cancel_btn = QPushButton("Cancel Export")
+        self.frame_btn.setSizePolicy(QSizePolicy.Policy.Expanding,
+                                     QSizePolicy.Policy.Fixed)
+        self.cancel_btn = QPushButton("Cancel")
+        self.cancel_btn.setObjectName("dangerBtn")
         self.cancel_btn.setVisible(False)
+        self.eco_check = QCheckBox("Eco Mode · 2 threads")
+        self.eco_check.setChecked(True)
+        self.eco_check.setToolTip(
+            "Limit FFmpeg to 2 threads so your PC stays quiet and responsive. "
+            "Uncheck for Turbo (all cores, faster export).")
         gl.addWidget(self.progress_bar)
+        gl.addWidget(self.eco_check)
         gl.addWidget(self.export_btn)
-        gl.addWidget(self.frame_btn)
-        gl.addWidget(self.cancel_btn)
-        form.addWidget(g)
+        gl.addLayout(_row(self.frame_btn, self.cancel_btn,
+                          stretch_last=False))
         form.addStretch(1)
 
         scroll.setWidget(inner)
-        left.addWidget(scroll)
+        left.addWidget(scroll, 1)
+        # Export stays pinned below the scrolling settings so the primary
+        # action is always one click away.
+        left.addWidget(g)
         splitter.addWidget(left_holder)
 
         # ---------------- right panel ----------------
         right = QWidget()
         rl = QVBoxLayout(right)
-        rl.setContentsMargins(6, 0, 0, 0)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(12)
+
+        preview_card = QWidget()
+        preview_card.setObjectName("previewCard")
+        pc = QVBoxLayout(preview_card)
+        pc.setContentsMargins(14, 12, 14, 14)
+        pc.setSpacing(10)
+        preview_head = QHBoxLayout()
+        preview_head.setSpacing(8)
+        preview_title = QLabel("Live preview")
+        preview_title.setObjectName("panelTitle")
+        self.preview_chip = QLabel("—")
+        self.preview_chip.setObjectName("previewChip")
+        preview_head.addWidget(preview_title)
+        preview_head.addStretch(1)
+        preview_head.addWidget(self.preview_chip)
+        pc.addLayout(preview_head)
         self.viewport = PreviewViewport()
-        rl.addWidget(self.viewport, 1)
+        pc.addWidget(self.viewport, 1)
+        rl.addWidget(preview_card, 1)
+
+        timeline = QWidget()
+        timeline.setObjectName("timelineCard")
+        tl = QVBoxLayout(timeline)
+        tl.setContentsMargins(14, 12, 14, 12)
+        tl.setSpacing(10)
 
         self.scrubber = QSlider(Qt.Orientation.Horizontal)
         self.scrubber.setRange(0, 1000)
         self.scrubber.setValue(1000)
         self.scrubber.setToolTip("Timeline scrubber (0-100% of animation)")
-        self.time_label = QLabel("100%")
+
         ctrl = QHBoxLayout()
-        self.play_btn = QPushButton("▶ Test Play")
+        ctrl.setSpacing(8)
+        self.play_btn = QPushButton("▶  Play")
         self.play_btn.setObjectName("playBtn")
-        self.pause_btn = QPushButton("⏸ Pause")
-        self.reset_btn = QPushButton("⏮ Reset")
-        self.end_btn = QPushButton("⏭ End")
+        self.play_btn.setToolTip("Play the animation in the preview")
+        self.pause_btn = QPushButton("Pause")
+        self.pause_btn.setToolTip("Pause the preview playback")
+        self.reset_btn = QPushButton("Reset")
+        self.reset_btn.setToolTip("Jump to the beginning of the animation")
+        self.end_btn = QPushButton("End")
+        self.end_btn.setToolTip("Jump to the final frame")
+        self.time_label = QLabel("100%")
+        self.time_label.setObjectName("timeChip")
+        self.time_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.time_label.setMinimumWidth(56)
         ctrl.addWidget(self.play_btn)
         ctrl.addWidget(self.pause_btn)
         ctrl.addWidget(self.reset_btn)
         ctrl.addWidget(self.end_btn)
-        ctrl.addWidget(self.scrubber, 1)
+        ctrl.addStretch(1)
         ctrl.addWidget(self.time_label)
-        rl.addLayout(ctrl)
+        tl.addLayout(ctrl)
+        tl.addWidget(self.scrubber)
+        rl.addWidget(timeline)
         splitter.addWidget(right)
 
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
-        splitter.setSizes([480, 900])
+        splitter.setSizes([500, 880])
 
     # ------------------------------------------------------------- signals
     def _connect_signals(self):
         self.import_btn.clicked.connect(self._import_dataset)
+        self.header_import_btn.clicked.connect(self._import_dataset)
         self.table_btn.clicked.connect(self._edit_data_table)
-        self.save_tpl_btn.clicked.connect(self._save_template)
-        self.browse_tpl_btn.clicked.connect(self._browse_templates)
+        self.header_tpl_btn.clicked.connect(self._browse_templates)
         self.bg_image_btn.clicked.connect(self._pick_bg_image)
         self.bg_remove_btn.clicked.connect(self._remove_bg_image)
         self.audio_btn.clicked.connect(self._pick_audio)
@@ -692,6 +854,7 @@ class MainWindow(QWidget):
         cfg.sky_top = self.skytop_color_btn.rgb
         cfg.sky_bottom = self.skybot_color_btn.rgb
         cfg.encode_preset = ENCODE_PRESETS[self.preset_combo.currentIndex()]
+        cfg.low_resource = self.eco_check.isChecked()
         return cfg
 
     # ------------------------------------------------------------ templates
@@ -703,6 +866,7 @@ class MainWindow(QWidget):
             "quality": self.quality_combo.currentText(),
             "fps": self.fps_combo.currentText(),
             "preset": self.preset_combo.currentText(),
+            "low_resource": self.eco_check.isChecked(),
             "speed": self.speed_spin.value(),
             "title": self.title_edit.text(),
             "title_align": self.title_align_combo.currentText(),
@@ -787,6 +951,7 @@ class MainWindow(QWidget):
             combo(self.quality_combo, "quality")
             combo(self.fps_combo, "fps")
             combo(self.preset_combo, "preset")
+            check(self.eco_check, "low_resource")
             num(self.speed_spin, "speed")
             text(self.title_edit, "title")
             combo(self.title_align_combo, "title_align")
@@ -849,6 +1014,10 @@ class MainWindow(QWidget):
         self.assets_sig = None
         self.update_preview()
 
+    def _reset_to_defaults(self):
+        """Return every visual control to the recommended starting look."""
+        self.apply_template(curated_template(len(self.df)))
+
     def _save_template(self):
         name, ok = QInputDialog.getText(
             self, "Save Template", "Template name:", text="")
@@ -891,6 +1060,8 @@ class MainWindow(QWidget):
     def update_preview(self):
         try:
             cfg = self.collect_config()
+            self.preview_chip.setText(
+                f"{cfg.width} × {cfg.height}   ·   {cfg.fps} fps")
             sig = cfg.asset_signature()
             if self.assets is None or sig != self.assets_sig:
                 self.assets = build_assets(cfg, self.df)
@@ -908,6 +1079,7 @@ class MainWindow(QWidget):
             self.viewport.set_frame(img)
         except Exception as e:
             print(f"[preview error] {e}")
+            self.preview_chip.setText("Preview unavailable")
             self.viewport.clear_frame()
 
     # ----------------------------------------------------------- playback
@@ -946,7 +1118,7 @@ class MainWindow(QWidget):
         self.assets_sig = None
         self.file_label.setText(f"{os.path.basename(path)} ({len(df)} items)")
         self.topn_spin.setMaximum(max(1, len(df)))
-        self.topn_spin.setValue(len(df))
+        self.topn_spin.setValue(min(TOP_N, len(df)))
         self.update_preview()
 
     def _edit_data_table(self):
@@ -960,7 +1132,7 @@ class MainWindow(QWidget):
             self.assets_sig = None
             self.file_label.setText(f"Edited dataset ({len(df)} items)")
             self.topn_spin.setMaximum(max(1, len(df)))
-            self.topn_spin.setValue(len(df))
+            self.topn_spin.setValue(min(TOP_N, len(df)))
             self.update_preview()
 
     def _pick_bg_image(self):

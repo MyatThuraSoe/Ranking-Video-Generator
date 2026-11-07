@@ -9,6 +9,7 @@ import cairo
 from PyQt6.QtCore import QThread, pyqtSignal
 
 from core.render_engine import build_assets, render_frame
+from utils.app_paths import ffmpeg_path
 
 
 class VideoExportThread(QThread):
@@ -29,7 +30,7 @@ class VideoExportThread(QThread):
     def _build_command(self):
         cfg = self.cfg
         cmd = [
-            "ffmpeg", "-y", "-nostats", "-loglevel", "error",
+            ffmpeg_path(), "-y", "-nostats", "-loglevel", "error",
             "-f", "rawvideo", "-vcodec", "rawvideo",
             "-s", f"{cfg.width}x{cfg.height}",
             "-pix_fmt", "bgra",
@@ -51,11 +52,13 @@ class VideoExportThread(QThread):
         cmd += ["-map", "0:v:0"]
         if has_audio:
             cmd += ["-map", "[aout]", "-c:a", "aac", "-b:a", "192k"]
+        threads = "2" if getattr(cfg, "low_resource", True) else "0"
         cmd += [
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-crf", str(cfg.crf),
             "-preset", cfg.encode_preset,
+            "-threads", threads,
             "-t", f"{cfg.duration:.2f}",
             self.output_path,
         ]

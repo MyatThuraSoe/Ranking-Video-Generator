@@ -11,7 +11,9 @@ import os
 import re
 from datetime import datetime
 
-_APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+from utils.app_paths import user_data_dir
+
+_APP_DIR = user_data_dir()
 STATES_DIR = os.path.join(_APP_DIR, "states")
 TEMPLATES_DIR = os.path.join(_APP_DIR, "templates")
 AUTOSAVE_NAME = "_autosave"
@@ -304,7 +306,7 @@ def set_last_image_dir(path):
 
 
 def get_theme():
-    return _load_settings().get("theme", "Dark")
+    return _load_settings().get("theme", "Bright")
 
 
 def set_theme(name):

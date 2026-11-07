@@ -2,7 +2,7 @@
 import os
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QColor, QFont, QKeySequence, QPixmap, QShortcut
+from PyQt6.QtGui import QColor, QKeySequence, QPixmap, QShortcut
 from PyQt6.QtWidgets import (
     QAbstractItemView, QDialog, QFileDialog, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QMessageBox, QPushButton,
@@ -54,10 +54,7 @@ class DatasetTableEditor(QDialog):
 
         head = QHBoxLayout()
         title = QLabel("Dataset Table Editor")
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        title.setFont(f)
+        title.setObjectName("pageTitle")
         head.addWidget(title)
         self.project_chip = QLabel()
         self.project_chip.setObjectName("projectChip")

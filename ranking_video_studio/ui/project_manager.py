@@ -1,6 +1,6 @@
 """Searchable project manager: create, open, rename and delete projects."""
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QFont
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (
     QAbstractItemView, QDialog, QHBoxLayout, QHeaderView, QInputDialog,
     QLabel, QLineEdit, QMessageBox, QPushButton, QTableWidget,
@@ -42,10 +42,7 @@ class ProjectManager(QDialog):
 
         head = QHBoxLayout()
         title = QLabel("Projects")
-        f = QFont()
-        f.setPointSize(13)
-        f.setBold(True)
-        title.setFont(f)
+        title.setObjectName("pageTitle")
         head.addWidget(title)
         head.addStretch(1)
         self.total_label = QLabel()

@@ -33,6 +33,7 @@ class RenderConfig:
     duration: float = 8.0
     crf: int = 18
     encode_preset: str = "fast"
+    low_resource: bool = True   # Eco: limit FFmpeg to 2 threads (0% GPU, quiet PC)
 
     # animation
     speed: float = 1.0
