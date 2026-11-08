@@ -2,7 +2,7 @@ import os
 
 import cairo
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QImage
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
@@ -68,9 +68,16 @@ class ColorButton(QPushButton):
             self.colorChanged.emit()
 
 
+def _group_layout(g):
+    lay = QVBoxLayout(g)
+    lay.setContentsMargins(4, 10, 4, 6)
+    lay.setSpacing(10)
+    return lay
+
+
 def _row(*widgets, stretch_last=True):
     lay = QHBoxLayout()
-    lay.setSpacing(8)
+    lay.setSpacing(10)
     for w in widgets:
         lay.addWidget(w)
     if stretch_last:
@@ -81,7 +88,7 @@ def _row(*widgets, stretch_last=True):
 def _field_row(label, *controls):
     """A settings row with a fixed-width caption so controls line up."""
     lay = QHBoxLayout()
-    lay.setSpacing(8)
+    lay.setSpacing(10)
     cap = QLabel(label)
     cap.setObjectName("fieldLabel")
     cap.setFixedWidth(124)
@@ -110,7 +117,9 @@ def _value_label(text, width=172):
 
 def _slider_row(label, slider):
     lay = QHBoxLayout()
-    lay.setSpacing(10)
+    lay.setContentsMargins(0, 7, 0, 7)
+    lay.setSpacing(12)
+    slider.setMinimumHeight(24)
     lay.addWidget(label)
     lay.addWidget(slider, 1)
     return lay
@@ -260,8 +269,8 @@ class MainWindow(QWidget):
         body.setObjectName("sectionBody")
         body.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         lay = QVBoxLayout(body)
-        lay.setContentsMargins(12, 10, 10, 12)
-        lay.setSpacing(8)
+        lay.setContentsMargins(12, 14, 10, 12)
+        lay.setSpacing(10)
         body.setVisible(expanded)
 
         def _toggled(on):
@@ -303,7 +312,7 @@ class MainWindow(QWidget):
         inner.setMinimumWidth(420)
         form = QVBoxLayout(inner)
         form.setContentsMargins(0, 0, 6, 0)
-        form.setSpacing(12)
+        form.setSpacing(14)
 
         # 1. Dataset
         g = QGroupBox("1. Dataset")
@@ -312,7 +321,7 @@ class MainWindow(QWidget):
         self.import_btn = QPushButton("Import CSV / Excel")
         self.import_btn.setToolTip("Load a .csv / .xlsx / .xls file with "
                                    "'name' and 'score' columns")
-        gl = QVBoxLayout(g)
+        gl = _group_layout(g)
         gl.addWidget(self.file_label)
         gl.addWidget(self.import_btn)
         self.table_btn = QPushButton("Edit Data Table…")
@@ -328,9 +337,37 @@ class MainWindow(QWidget):
         gl.addLayout(_field_row("Items to show", self.topn_spin))
         form.addWidget(g)
 
+        # Tower / Bar Image — one image applied to every tower graphic
+        gl = self._collapsible_group(form, "Tower && Bar Image", expanded=True)
+        self._tower_img_path = ""
+        self.tower_image_thumb = QLabel("–")
+        self.tower_image_thumb.setObjectName("towerThumb")
+        self.tower_image_thumb.setFixedSize(44, 44)
+        self.tower_image_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.tower_image_label = QLabel("none")
+        self.tower_image_label.setWordWrap(True)
+        thumb_row = QHBoxLayout()
+        thumb_row.setSpacing(10)
+        thumb_row.addWidget(self.tower_image_thumb)
+        thumb_row.addWidget(self.tower_image_label, 1)
+        gl.addLayout(thumb_row)
+        self.tower_image_btn = QPushButton("Add / Change image…")
+        self.tower_image_btn.setToolTip(
+            "Pick one image to replace every tower / bar")
+        self.tower_image_btn.clicked.connect(self._pick_tower_image)
+        self.tower_image_remove_btn = QPushButton("Remove")
+        self.tower_image_remove_btn.setObjectName("towerImgRemove")
+        self.tower_image_remove_btn.setFixedWidth(86)
+        self.tower_image_remove_btn.setEnabled(False)
+        self.tower_image_remove_btn.setToolTip(
+            "Remove the image and restore the solid 3D towers")
+        self.tower_image_remove_btn.clicked.connect(self._remove_tower_image)
+        gl.addLayout(_row(self.tower_image_btn, self.tower_image_remove_btn))
+        gl.addWidget(_mini_label("Replaces every tower / bar with this image"))
+
         # 2. Resolution & Quality
         g = QGroupBox("2. Resolution && Quality")
-        gl = QVBoxLayout(g)
+        gl = _group_layout(g)
         self.aspect_combo = QComboBox()
         self.aspect_combo.addItems(RESOLUTIONS.keys())
         self.aspect_combo.setCurrentIndex(2)
@@ -367,7 +404,7 @@ class MainWindow(QWidget):
 
         # 3. Background & Canvas
         g = QGroupBox("3. Background && Canvas")
-        gl = QVBoxLayout(g)
+        gl = _group_layout(g)
         self.title_edit = QLineEdit("TOP RANKINGS")
         self.title_edit.setToolTip("Video title shown at the top")
         self.title_align_combo = QComboBox()
@@ -542,6 +579,10 @@ class MainWindow(QWidget):
         self.skytop_color_btn.setToolTip("Sky gradient top color")
         self.skybot_color_btn = ColorButton((0.74, 0.80, 0.84))
         self.skybot_color_btn.setToolTip("Sky gradient bottom color")
+        self.ground_color_btn = ColorButton((0.44, 0.44, 0.46))
+        self.ground_color_btn.setToolTip("Ground plane color — the area below the horizon")
+        self.skyline_color_btn = ColorButton((0.30, 0.31, 0.33))
+        self.skyline_color_btn.setToolTip("City skyline color — the silhouette band on the horizon")
         self.vpre_edit = QLineEdit("$ ")
         self.vpre_edit.setToolTip("Text before the tower value")
         self.vsu_edit = QLineEdit(" B")
@@ -561,6 +602,8 @@ class MainWindow(QWidget):
         gl.addLayout(_field_row("Sky top", self.skytop_color_btn,
                                 _mini_label("Sky bottom"),
                                 self.skybot_color_btn))
+        gl.addLayout(_field_row("Ground", self.ground_color_btn,
+                                _mini_label("Skyline"), self.skyline_color_btn))
         gl.addLayout(_field_row("Value Prefix", self.vpre_edit,
                                 _mini_label("Suffix"), self.vsu_edit))
         gl.addLayout(_field_row("Value Decimals", self.vdec_spin))
@@ -599,9 +642,7 @@ class MainWindow(QWidget):
         # Export
         g = QGroupBox("Export")
         g.setObjectName("exportCard")
-        gl = QVBoxLayout(g)
-        gl.setContentsMargins(0, 0, 0, 0)
-        gl.setSpacing(8)
+        gl = _group_layout(g)
         self.progress_bar = QProgressBar()
         self.progress_bar.setRange(0, 100)
         self.progress_bar.setValue(0)
@@ -755,7 +796,8 @@ class MainWindow(QWidget):
         for btn in (self.badge_color_btn, self.rank_color_btn,
                     self.tower_color_btn, self.plate_color_btn,
                     self.value_color_btn, self.skytop_color_btn,
-                    self.skybot_color_btn, self.name_color_btn,
+                    self.skybot_color_btn, self.ground_color_btn,
+                    self.skyline_color_btn, self.name_color_btn,
                     self.text_color_btn, self.extra_color_btn,
                     self.title_color_btn, self.avatar_border_color_btn):
             btn.colorChanged.connect(self._on_setting_changed)
@@ -817,6 +859,7 @@ class MainWindow(QWidget):
         cfg.bg_blur = self.blur_slider.value()
         cfg.bg_dim = self.dim_slider.value()
         cfg.shadow_enabled = self.shadow_check.isChecked()
+        cfg.tower_image = getattr(self, "_tower_img_path", "")
         cfg.avatar_shape = AVATAR_SHAPES[self.avatar_combo.currentText()]
         cfg.avatar_size = self.avatar_size_spin.value()
         cfg.avatar_border_radius = self.avatar_radius_slider.value() / 100.0
@@ -853,6 +896,8 @@ class MainWindow(QWidget):
         cfg.value_color = self.value_color_btn.rgb
         cfg.sky_top = self.skytop_color_btn.rgb
         cfg.sky_bottom = self.skybot_color_btn.rgb
+        cfg.ground_color = self.ground_color_btn.rgb
+        cfg.skyline_color = self.skyline_color_btn.rgb
         cfg.encode_preset = ENCODE_PRESETS[self.preset_combo.currentIndex()]
         cfg.low_resource = self.eco_check.isChecked()
         return cfg
@@ -882,6 +927,7 @@ class MainWindow(QWidget):
             "badge_color": list(self.badge_color_btn.rgb),
             "badge_size": self.badge_size_spin.value(),
             "shadow": self.shadow_check.isChecked(),
+            "tower_image": getattr(self, "_tower_img_path", ""),
             "avatar_shape": self.avatar_combo.currentText(),
             "avatar_size": self.avatar_size_spin.value(),
             "avatar_radius": self.avatar_radius_slider.value(),
@@ -903,6 +949,8 @@ class MainWindow(QWidget):
             "value_decimals": self.vdec_spin.value(),
             "sky_top": list(self.skytop_color_btn.rgb),
             "sky_bottom": list(self.skybot_color_btn.rgb),
+            "ground_color": list(self.ground_color_btn.rgb),
+            "skyline_color": list(self.skyline_color_btn.rgb),
             "rank_size": self.rank_size_spin.value(),
             "rank_color": list(self.rank_color_btn.rgb),
             "name_size": self.name_size_spin.value(),
@@ -986,6 +1034,8 @@ class MainWindow(QWidget):
             num(self.vdec_spin, "value_decimals")
             color(self.skytop_color_btn, "sky_top")
             color(self.skybot_color_btn, "sky_bottom")
+            color(self.ground_color_btn, "ground_color")
+            color(self.skyline_color_btn, "skyline_color")
             num(self.rank_size_spin, "rank_size")
             color(self.rank_color_btn, "rank_color")
             num(self.name_size_spin, "name_size")
@@ -1003,6 +1053,9 @@ class MainWindow(QWidget):
                 self.bg_image_label.setText(
                     os.path.basename(self._bg_image_path) if has else "none")
                 self.bg_remove_btn.setEnabled(has)
+            if "tower_image" in d:
+                self._tower_img_path = str(d["tower_image"])
+                self._refresh_tower_image_ui()
             if "audio_file" in d:
                 self._audio_path = str(d["audio_file"])
                 has = bool(self._audio_path)
@@ -1134,6 +1187,43 @@ class MainWindow(QWidget):
             self.topn_spin.setMaximum(max(1, len(df)))
             self.topn_spin.setValue(min(TOP_N, len(df)))
             self.update_preview()
+
+    # ------------------------------------------------------- tower image
+    def _refresh_tower_image_ui(self):
+        path = getattr(self, "_tower_img_path", "")
+        has = bool(path)
+        self.tower_image_label.setText(os.path.basename(path) if has else "none")
+        self.tower_image_remove_btn.setEnabled(has)
+        pm = QPixmap(path) if has and os.path.isfile(path) else QPixmap()
+        if not pm.isNull():
+            self.tower_image_thumb.setPixmap(pm.scaled(
+                42, 42, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+            self.tower_image_thumb.setText("")
+            self.tower_image_thumb.setToolTip(path)
+        else:
+            self.tower_image_thumb.setPixmap(QPixmap())
+            self.tower_image_thumb.setText("–")
+            self.tower_image_thumb.setToolTip("No shared tower image")
+
+    def _pick_tower_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Tower / bar image (replaces every tower)",
+            store.get_last_image_dir(),
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not path:
+            return
+        store.set_last_image_dir(path)
+        self._tower_img_path = path
+        self._refresh_tower_image_ui()
+        self.assets_sig = None
+        self.update_preview()
+
+    def _remove_tower_image(self):
+        self._tower_img_path = ""
+        self._refresh_tower_image_ui()
+        self.assets_sig = None
+        self.update_preview()
 
     def _pick_bg_image(self):
         path, _ = QFileDialog.getOpenFileName(

@@ -120,6 +120,7 @@ def main():
 
     from data.state_store import get_theme
     from ui.main_window import MainWindow
+    from ui.scroll_guard import install as install_scroll_guard
     from ui.styles import apply_theme
     from utils.app_paths import resource_path
     from utils.ffmpeg_check import ffmpeg_available
@@ -133,6 +134,7 @@ def main():
             pass
 
     app = QApplication(sys.argv)
+    install_scroll_guard(app)
     app.setApplicationName(APP_NAME)
     app.setApplicationDisplayName(APP_NAME)
     # Fusion gives QSS full control over every control instead of mixing in

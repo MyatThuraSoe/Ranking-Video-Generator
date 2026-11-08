@@ -227,6 +227,11 @@ def build_incline_assets(cfg, df, assets, ap_module):
     radius = getattr(cfg, "avatar_border_radius", 0.0)
     bcolor = getattr(cfg, "avatar_border_color", (1.0, 1.0, 1.0))
     bsize = getattr(cfg, "avatar_border_size", 0.0)
+    assets.incline_bar_surface = None
+    gpath = getattr(cfg, "tower_image", "")
+    if isinstance(gpath, str) and gpath.strip() and gpath.strip().lower() != "nan":
+        assets.incline_bar_surface = ap_module.process_tower_bar_image(
+            gpath.strip(), int(512 * scale))
     for i in range(n):
         row = df.iloc[i]
         path = row.get("image")
@@ -287,6 +292,74 @@ def _billboard_surface(ctx, surf, px, py, world_h, s, alpha=1.0):
     ctx.restore()
 
 
+def _billboard_stretch(ctx, surf, px, py, world_w, world_h, s, alpha=1.0):
+    """Draw a surface stretched to world_w x world_h, bottom-centred at px,py."""
+    oh = surf.get_height() or 1
+    ow = surf.get_width() or 1
+    tw, th = world_w * s, world_h * s
+    if tw <= 1 or th <= 1:
+        return
+    ctx.save()
+    if alpha < 1.0:
+        ctx.push_group()
+    ctx.translate(px - tw / 2.0, py - th)
+    ctx.scale(tw / ow, th / oh)
+    ctx.set_source_surface(surf, 0, 0)
+    ctx.paint()
+    if alpha < 1.0:
+        ctx.pop_group_to_source()
+        ctx.paint_with_alpha(alpha)
+    ctx.restore()
+
+
+def _wrap_text(ctx, text, max_width):
+    """Greedy word-wrap to max_width px using the current font; splits overlong words."""
+    lines = []
+    for para in str(text).split("\n"):
+        words = para.split()
+        if not words:
+            lines.append("")
+            continue
+        cur = ""
+        for word in words:
+            trial = f"{cur} {word}" if cur else word
+            if ctx.text_extents(trial)[4] <= max_width:
+                cur = trial
+            elif not cur:
+                chunk = ""
+                for ch in word:
+                    if chunk and ctx.text_extents(chunk + ch)[4] > max_width:
+                        lines.append(chunk)
+                        chunk = ch
+                    else:
+                        chunk += ch
+                cur = chunk
+            else:
+                lines.append(cur)
+                cur = word
+        lines.append(cur)
+    return lines or [""]
+
+
+def _draw_lines(ctx, lines, cx, first_cy, line_h):
+    """Draw wrapped lines centred on cx, first line glyph-centred at first_cy."""
+    for k, ln in enumerate(lines):
+        if not ln:
+            continue
+        xb, yb, twd, thd, _, _ = ctx.text_extents(ln)
+        cy = first_cy + k * line_h
+        ctx.move_to(cx - twd / 2 - xb, cy - yb - thd / 2)
+        ctx.show_text(ln)
+
+
+def _set_face_font(ctx, serif_bold, px):
+    if serif_bold:
+        ctx.select_font_face("Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+    else:
+        ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+    ctx.set_font_size(px)
+
+
 def _rounded_rect(ctx, x, y, w, h, r):
     r = max(0.0, min(r, h / 2.0, w / 2.0))
     ctx.new_path()
@@ -322,9 +395,11 @@ def _draw_sky_ground(ctx, cfg, cam, focus_x, skyline_rects, bg_surface):
         ctx.rectangle(0, 0, w, horizon + 1)
         ctx.fill()
 
+    gc = getattr(cfg, "ground_color", (0.44, 0.44, 0.46))
     ground = cairo.LinearGradient(0, horizon, 0, h)
-    ground.add_color_stop_rgb(0, 0.44, 0.44, 0.46)
-    ground.add_color_stop_rgb(1, 0.28, 0.28, 0.30)
+    ground.add_color_stop_rgb(0, *gc)
+    # 0.64 keeps the original horizon-to-floor shading depth for any hue
+    ground.add_color_stop_rgb(1, gc[0] * 0.64, gc[1] * 0.64, gc[2] * 0.64)
     ctx.set_source(ground)
     ctx.rectangle(0, horizon, w, h - horizon)
     ctx.fill()
@@ -332,7 +407,8 @@ def _draw_sky_ground(ctx, cfg, cam, focus_x, skyline_rects, bg_surface):
     # procedural city skyline sitting on the horizon
     if skyline_rects:
         band = cfg.height * 0.16
-        ctx.set_source_rgba(0.30, 0.31, 0.33, 0.95)
+        sc = getattr(cfg, "skyline_color", (0.30, 0.31, 0.33))
+        ctx.set_source_rgba(sc[0], sc[1], sc[2], 0.95)
         for (xf, wf, hf) in skyline_rects:
             ctx.rectangle(xf * w, horizon - hf * band, wf * w, hf * band + 2)
         ctx.fill()
@@ -457,84 +533,95 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                         (x + hw + 2.3, 0.01, hd + 0.7), (x + hw, 0.01, hd)],
                        (0, 0, 0), 0.22)
 
-        # Side (+X), front (-Z), top
-        _fill_quad(ctx, cam,
-                   [(x + hw, 0, -hd), (x + hw, 0, hd), (x + hw, h, hd), (x + hw, h, -hd)],
-                   c_side)
-        front = _fill_quad(ctx, cam,
-                           [(x - hw, 0, -hd), (x + hw, 0, -hd),
-                            (x + hw, h, -hd), (x - hw, h, -hd)], c_front)
-        _fill_quad(ctx, cam,
-                   [(x - hw, h, -hd), (x + hw, h, -hd), (x + hw, h, hd), (x - hw, h, hd)],
-                   c_top)
-        if not front:
-            continue
-        s = front[0][2]                    # pixels-per-world-unit at this depth
+        bar_surf = getattr(assets, "incline_bar_surface", None)
+        if bar_surf is not None:
+            # The shared image stands in for the whole tower body.
+            pb = cam.project((x, 0, -hd))
+            if pb is None:
+                continue
+            s = pb[2]
+            _billboard_stretch(ctx, bar_surf, pb[0], pb[1], hw * 2.0, h, s)
+        else:
+            # Side (+X), front (-Z), top
+            _fill_quad(ctx, cam,
+                       [(x + hw, 0, -hd), (x + hw, 0, hd), (x + hw, h, hd), (x + hw, h, -hd)],
+                       c_side)
+            front = _fill_quad(ctx, cam,
+                               [(x - hw, 0, -hd), (x + hw, 0, -hd),
+                                (x + hw, h, -hd), (x - hw, h, -hd)], c_front)
+            _fill_quad(ctx, cam,
+                       [(x - hw, h, -hd), (x + hw, h, -hd), (x + hw, h, hd), (x - hw, h, hd)],
+                       c_top)
+            if not front:
+                continue
+            s = front[0][2]                # pixels-per-world-unit at this depth
 
-        # Name plate on the face
+        # Face text: top-down flow layout so wrapped blocks never collide.
+        face_w = max(8.0, TOWER_W * s * 0.86)
         name = str(tw["row"]["name"])
-        plate_y = max(0.45, h - 0.62)
-        pc = cam.project((x, plate_y, -hd - 0.02))
-        if pc:
-            ctx.select_font_face("Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            fs = getattr(cfg, "name_font_size", 0.34) * s
-            ctx.set_font_size(fs)
-            xb, yb, twd, thd, _, _ = ctx.text_extents(name)
-            pw, ph = twd + 0.55 * s, max(0.5 * s, fs * 1.9)
-            ctx.set_source_rgb(*cfg.plate_color)
-            _rounded_rect(ctx, pc[0] - pw / 2, pc[1] - ph / 2, pw, ph, 0.09 * s)
-            ctx.fill()
-            ctx.set_source_rgb(*getattr(cfg, "name_color", (1, 1, 1)))
-            ctx.move_to(pc[0] - twd / 2 - xb, pc[1] + fs * 0.35 - yb - fs / 2)
-            ctx.show_text(name)
-
-        # Subtitle (text column) under the name plate
         sub = tw["row"].get("text")
         sub = "" if sub is None or str(sub).lower() == "nan" else str(sub)
-        if len(sub) > 35:
-            sub = sub[:35]
-        if sub:
-            sc = cam.project((x, max(0.20, plate_y - 0.42), -hd - 0.02))
-            if sc:
-                ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
-                                     cairo.FONT_WEIGHT_NORMAL)
-                ctx.set_font_size(getattr(cfg, "text_font_size", 0.20) * s)
-                ctx.set_source_rgb(*getattr(cfg, "text_color", (0.85, 0.85, 0.88)))
-                xb, yb, twd, thd, _, _ = ctx.text_extents(sub)
-                ctx.move_to(sc[0] - twd / 2 - xb, sc[1] + 0.07 * s - yb)
-                ctx.show_text(sub)
-
-        # Value on the face (static: towers already exist)
-        vc = cam.project((x, max(0.30, h - 1.45), -hd - 0.02))
-        if vc:
-            dec = getattr(cfg, "value_decimals", 1)
-            num = f"{tw['score']:,.{dec}f}" if dec > 0 else f"{int(round(tw['score'])):,}"
-            label = f"{cfg.value_prefix}{num}{cfg.value_suffix}"
-            ctx.select_font_face("Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-            ctx.set_font_size(getattr(cfg, "value_font_size", 0.30) * s)
-            ctx.set_source_rgb(*cfg.value_color)
-            xb, yb, twd, thd, _, _ = ctx.text_extents(label)
-            ctx.move_to(vc[0] - twd / 2 - xb, vc[1] + 0.20 * s - yb)
-            ctx.show_text(label)
-
-        # Extra text line below the value (extratext column)
         extra = tw["row"].get("extratext")
         extra = "" if extra is None or str(extra).lower() == "nan" else str(extra)
-        if len(extra) > 40:
-            extra = extra[:40]
+        dec = getattr(cfg, "value_decimals", 1)
+        num = f"{tw['score']:,.{dec}f}" if dec > 0 else f"{int(round(tw['score'])):,}"
+        value_label = f"{cfg.value_prefix}{num}{cfg.value_suffix}"
+        show_badges = getattr(cfg, "show_badges", True)
+        # (kind, text, world font size, serif-bold, color, line factor, pad)
+        specs = [("plate", name, getattr(cfg, "name_font_size", 0.34), True,
+                  getattr(cfg, "name_color", (1, 1, 1)), 1.22, 0.34)]
+        if sub:
+            specs.append(("text", sub, getattr(cfg, "text_font_size", 0.20),
+                          False, getattr(cfg, "text_color", (0.85, 0.85, 0.88)),
+                          1.3, 0.0))
+        specs.append(("text", value_label, getattr(cfg, "value_font_size", 0.30),
+                      True, cfg.value_color, 1.25, 0.0))
         if extra:
-            vfs = getattr(cfg, "value_font_size", 0.30)
-            efs = getattr(cfg, "extra_font_size", 0.18)
-            extra_y = max(0.15, h - 1.59 - 0.6 * vfs - efs)
-            ec = cam.project((x, extra_y, -hd - 0.02))
-            if ec:
-                ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
-                                     cairo.FONT_WEIGHT_NORMAL)
-                ctx.set_font_size(getattr(cfg, "extra_font_size", 0.18) * s)
-                ctx.set_source_rgb(*getattr(cfg, "extra_color", (0.80, 0.82, 0.85)))
-                xb, yb, twd, thd, _, _ = ctx.text_extents(extra)
-                ctx.move_to(ec[0] - twd / 2 - xb, ec[1] + 0.06 * s - yb)
-                ctx.show_text(extra)
+            specs.append(("text", extra, getattr(cfg, "extra_font_size", 0.18),
+                          False, getattr(cfg, "extra_color", (0.80, 0.82, 0.85)),
+                          1.3, 0.0))
+
+        gap = 0.16
+        plate_y = h - (0.45 if show_badges else 0.30)   # flow top; badge sits above
+        avail = max(0.5, plate_y - 0.15)
+
+        def measure(k):
+            laid, total = [], 0.0
+            for kind, txt, fw, serif, col, lf, pad in specs:
+                _set_face_font(ctx, serif, fw * k * s)
+                lines = _wrap_text(ctx, txt, face_w)
+                lh = fw * k * lf
+                bh = len(lines) * lh + pad * k
+                laid.append((kind, lines, fw * k, serif, col, lh, bh))
+                total += bh
+            return laid, total + gap * k * (len(laid) - 1)
+
+        k = 1.0
+        laid, total = measure(k)
+        for _ in range(3):
+            if total <= avail:
+                break
+            k *= avail / total
+            laid, total = measure(k)
+
+        cursor = plate_y
+        for kind, lines, fw, serif, col, lh, bh in laid:
+            center = cursor - bh / 2.0
+            pr = cam.project((x, center, -hd - 0.02))
+            if pr:
+                _set_face_font(ctx, serif, fw * s)
+                if kind == "plate":
+                    widest = max((ctx.text_extents(ln)[4] for ln in lines),
+                                 default=0.0)
+                    pw = widest + 0.55 * s
+                    ctx.set_source_rgb(*cfg.plate_color)
+                    _rounded_rect(ctx, pr[0] - pw / 2, pr[1] - bh * s / 2,
+                                  pw, bh * s, 0.09 * s)
+                    ctx.fill()
+                ctx.set_source_rgb(*col)
+                _draw_lines(ctx, lines, pr[0],
+                            pr[1] - (len(lines) - 1) * lh * s / 2, lh * s)
+            cursor -= bh + gap * k
 
         # Rank badge on the face (respects the Badges group)
         if getattr(cfg, "show_badges", True):

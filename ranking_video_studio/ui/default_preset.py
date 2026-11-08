@@ -95,6 +95,8 @@ def curated_template(row_count=None):
         "plate_color": [0.16, 0.13, 0.16],
         "sky_top": [0.10, 0.22, 0.45],
         "sky_bottom": [0.72, 0.85, 0.95],
+        "ground_color": [0.44, 0.44, 0.46],
+        "skyline_color": [0.30, 0.31, 0.33],
 
         # -- avatars & audio -------------------------------------------------
         "avatar_shape": "Circle",

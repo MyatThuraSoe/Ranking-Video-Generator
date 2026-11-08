@@ -42,6 +42,20 @@ def process_background_image(path, w, h, blur, dim):
     return _surface_from_pil(img)
 
 
+def process_tower_bar_image(path, size):
+    """Load an image to stand in for the tower/bar body itself (no crop).
+
+    Downscaled once to keep the render loop cheap; stretched to each bar's
+    width/height at draw time. Returns a Cairo surface or None on failure.
+    """
+    try:
+        img = Image.open(path).convert("RGBA")
+        img.thumbnail((size, size), Image.Resampling.LANCZOS)
+        return _surface_from_pil(img)
+    except Exception:
+        return None
+
+
 def process_avatar_image(path, size, shape, radius=0.0,
                          border_color=(1.0, 1.0, 1.0), border_size=0.0):
     """Center-crop to square, mask to shape, optionally ring it with a border.

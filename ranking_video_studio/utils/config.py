@@ -54,6 +54,7 @@ class RenderConfig:
     shadow_enabled: bool = True
 
     # avatars
+    tower_image: str = ""       # one shared image that REPLACES every tower/bar
     avatar_shape: str = "circle"  # circle | rounded | square
     avatar_size: float = 1.0      # scale of the image sprite on the tower
     avatar_border_radius: float = 0.0  # 0..1 corner rounding (square/rounded)
@@ -93,6 +94,8 @@ class RenderConfig:
     value_color: tuple = (0.48, 0.06, 0.10)
     sky_top: tuple = (0.29, 0.49, 0.71)
     sky_bottom: tuple = (0.74, 0.80, 0.84)
+    ground_color: tuple = (0.44, 0.44, 0.46)
+    skyline_color: tuple = (0.30, 0.31, 0.33)
     value_prefix: str = "$ "
     value_suffix: str = " B"
     value_decimals: int = 1
@@ -106,6 +109,6 @@ class RenderConfig:
             self.width, self.height, self.bg_mode, self.bg_image,
             self.bg_blur, self.bg_dim, self.avatar_shape,
             self.avatar_border_radius, self.avatar_border_color,
-            self.avatar_border_size,
+            self.avatar_border_size, self.tower_image,
             self.top_n,
         )

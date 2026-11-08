@@ -241,6 +241,39 @@ QLabel#projectChip[saved="false"] {
     border: 1px solid $warn; border-radius: 10px; padding: 3px 10px;
     font-size: 11px; font-weight: 600;
 }
+
+/* ------------------------------------------------- tower image manager */
+QLabel#towerThumb {
+    background-color: $surface2; border: 1px solid $border_input;
+    border-radius: 7px; color: $dim; font-size: 12px;
+}
+QPushButton#towerImgRemove {
+    padding: 3px 8px; font-size: 12px; border-radius: 7px;
+    color: $err_text;
+}
+QPushButton#towerImgRemove:hover { border-color: $danger; }
+QPushButton#towerImgRemove:disabled { color: $disabled_text; }
+
+/* ---------------------------------------------------------- code editor */
+QPlainTextEdit#codeEditor {
+    background-color: $surface2; border: 1px solid $border_input;
+    border-radius: 10px; padding: 10px 12px; color: $text;
+    font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px;
+    selection-background-color: $accent; selection-color: $accent_text;
+}
+QPlainTextEdit#codeEditor:focus { border-color: $accent; }
+QPlainTextEdit#codeEditor:disabled {
+    color: $disabled_text; background-color: $surface2; border-color: $border;
+}
+QPushButton#codeSaveBtn {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+                                stop:0 $accent, stop:1 $accent_hover);
+    border: 1px solid $accent_hover; color: $accent_text; padding: 6px 12px;
+}
+QPushButton#codeSaveBtn:hover { background: $accent_hover; }
+QPushButton#codeSaveBtn:disabled {
+    background: $surface2; border-color: $border; color: $disabled_text;
+}
 QLabel#thumbLabel {
     border: 1px solid $border_input; border-radius: 7px;
     background-color: $surface2; color: $dim;
