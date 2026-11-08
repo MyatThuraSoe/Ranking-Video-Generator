@@ -18,7 +18,9 @@ from data import state_store as store
 from data.state_store import get_theme, set_theme
 from ui import styles
 from ui.default_preset import curated_template
+from ui.license_dialog import LicenseDialog
 from ui.preview_viewport import PreviewViewport
+from utils import license as license_service
 from utils.app_paths import logo_path
 from utils.config import (
     BASE_DURATION, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
@@ -161,6 +163,7 @@ class MainWindow(QWidget):
         # Start on the curated "hook" look so the first thing a new user sees
         # is a finished, upload-ready style rather than neutral defaults.
         self.apply_template(curated_template(len(self.df)))
+        self._refresh_license_ui()
 
     # ------------------------------------------------------------- menu bar
     def _build_menu_bar(self):
@@ -175,6 +178,9 @@ class MainWindow(QWidget):
         act.triggered.connect(self._save_frame_png)
         act = file_menu.addAction("Export Video…")
         act.triggered.connect(self._start_export)
+        file_menu.addSeparator()
+        act = file_menu.addAction("License…")
+        act.triggered.connect(self._show_license)
         file_menu.addSeparator()
         act = file_menu.addAction("Quit")
         act.triggered.connect(self.close)
@@ -246,6 +252,10 @@ class MainWindow(QWidget):
         hl.addLayout(titles)
         hl.addStretch(1)
 
+        self.license_btn = QPushButton("License")
+        self.license_btn.setObjectName("headerAction")
+        self.license_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.license_btn.setToolTip("View license status or enter a new key")
         self.header_import_btn = QPushButton("Import data")
         self.header_import_btn.setObjectName("headerAction")
         self.header_import_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -254,6 +264,7 @@ class MainWindow(QWidget):
         self.header_tpl_btn.setObjectName("headerAction")
         self.header_tpl_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.header_tpl_btn.setToolTip("Save or re-apply a complete visual look")
+        hl.addWidget(self.license_btn)
         hl.addWidget(self.header_import_btn)
         hl.addWidget(self.header_tpl_btn)
         return header
@@ -791,6 +802,7 @@ class MainWindow(QWidget):
     def _connect_signals(self):
         self.import_btn.clicked.connect(self._import_dataset)
         self.header_import_btn.clicked.connect(self._import_dataset)
+        self.license_btn.clicked.connect(self._show_license)
         self.table_btn.clicked.connect(self._edit_data_table)
         self.header_tpl_btn.clicked.connect(self._browse_templates)
         self.bg_image_btn.clicked.connect(self._pick_bg_image)
@@ -1380,6 +1392,50 @@ class MainWindow(QWidget):
                     "dataset, a PNG/JPG background, or an audio file.")
         event.acceptProposedAction()
 
+    # -------------------------------------------------------------- license
+    def _refresh_license_ui(self):
+        status = license_service.status()
+        if not status.active:
+            text = "License: inactive"
+        elif status.info is not None and status.info.is_lifetime:
+            text = "Lifetime license"
+        else:
+            left = status.videos_left
+            text = f"1-Day · {left}/{status.max_videos} left"
+        self.license_btn.setText(text)
+        self.license_btn.setToolTip(
+            f"{status.summary()}\n\nMachine ID: {status.machine_id}\n\n"
+            "Click to view license details or enter a new key.")
+
+    def _show_license(self):
+        dialog = LicenseDialog(
+            license_service.status(), self, allow_close=True)
+        dialog.exec()
+        self._refresh_license_ui()
+        return license_service.status()
+
+    def _ensure_license(self):
+        """Return an active status, or None after explaining why not."""
+        status = license_service.status()
+        if not status.active:
+            LicenseDialog(status, self, allow_close=True).exec()
+            status = license_service.status()
+        if not status.active:
+            QMessageBox.warning(
+                self, "License required",
+                status.error
+                or "A valid license is required to export videos.")
+            return None
+        if status.videos_left == 0:
+            QMessageBox.warning(
+                self, "Video limit reached",
+                "Your 1-Day License has already used its "
+                f"{status.max_videos} video exports.\n\n"
+                "Request a new license key from the seller to export more "
+                "videos.")
+            return None
+        return status
+
     # -------------------------------------------------------------- export
     def set_export_enabled(self, enabled):
         self.export_btn.setEnabled(enabled)
@@ -1445,6 +1501,8 @@ class MainWindow(QWidget):
             return
         if self.export_thread is not None and self.export_thread.isRunning():
             return
+        if self._ensure_license() is None:
+            return
         path = self._video_path
         if not path.lower().endswith(".mp4"):
             path += ".mp4"
@@ -1466,6 +1524,13 @@ class MainWindow(QWidget):
                     f"Cannot create folder:\n{parent}\n{e}")
                 return
         cfg = self.collect_config()
+        try:
+            license_service.reserve_video()
+        except license_service.LicenseError as exc:
+            QMessageBox.warning(self, "Video limit reached", str(exc))
+            self._refresh_license_ui()
+            return
+        self._refresh_license_ui()
         self.play_timer.stop()
         self.progress_bar.setValue(0)
         self.export_btn.setEnabled(False)

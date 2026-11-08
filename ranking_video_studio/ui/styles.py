@@ -229,6 +229,15 @@ QLabel#valueLabel { color: $text_soft; font-size: 12px; }
 QLabel#hintLabel { color: $dim; font-size: 12px; }
 QLabel#statusLabel[error="false"] { color: $ok_text; font-size: 12px; }
 QLabel#statusLabel[error="true"] { color: $err_text; font-size: 12px; }
+QLabel#licenseSummary {
+    color: $text_soft; background-color: $surface2;
+    border: 1px solid $border; border-radius: 10px;
+    padding: 10px 12px; font-size: 12px;
+}
+QLabel#licenseSummary[active="true"] {
+    color: $ok_text; background-color: $surface2;
+    border-color: $ok;
+}
 QLabel#projectChip[saved="true"] {
     color: $title; background-color: $chip_bg;
     border: 1px solid $accent; border-radius: 10px; padding: 3px 10px;
@@ -280,7 +289,7 @@ QLabel#cellName { color: $text_soft; border: none; font-size: 12px; }
 QLabel#cellName[empty="true"] { color: $dim; }
 
 /* ------------------------------------------------------------- inputs */
-QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
+QLineEdit, QPlainTextEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     background-color: $surface2;
     border: 1px solid $border_input;
     border-radius: 8px;
@@ -290,14 +299,16 @@ QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox {
     selection-background-color: $accent;
     selection-color: $accent_text;
 }
-QLineEdit:hover, QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
+QLineEdit:hover, QPlainTextEdit:hover,
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: $dim;
 }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
+QLineEdit:focus, QPlainTextEdit:focus,
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border: 1px solid $accent;
     background-color: $surface3;
 }
-QLineEdit:disabled, QComboBox:disabled,
+QLineEdit:disabled, QPlainTextEdit:disabled, QComboBox:disabled,
 QSpinBox:disabled, QDoubleSpinBox:disabled {
     color: $disabled_text; background-color: $surface2;
     border-color: $border;

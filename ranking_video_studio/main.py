@@ -62,6 +62,21 @@ def _selftest():
         line = (proc.stdout or proc.stderr).splitlines()[0]
         return {"path": path, "version": line}
 
+    def _license():
+        import cryptography
+
+        from utils.license import _public_key, machine_id, parse_and_verify
+        from utils.license_public_key import KEY_ID
+        _public_key()  # fails if the embedded public key is unreadable
+        result = {"machine_id": machine_id(), "key_id": KEY_ID,
+                  "cryptography": cryptography.__version__}
+        sample = os.environ.get("LRBAR_SELFTEST_LICENSE", "").strip()
+        if sample:
+            info = parse_and_verify(sample)
+            result["verified_key"] = {"kind": info.kind,
+                                      "machine": info.machine}
+        return result
+
     def _export():
         import cairo
         from core.render_engine import build_assets, render_frame
@@ -100,6 +115,7 @@ def _selftest():
 
     check("imports", _imports)
     check("bundled_assets", _assets)
+    check("license", _license)
     check("ffmpeg", _ffmpeg)
     check("render_export", _export)
 
@@ -120,9 +136,11 @@ def main():
 
     from data.seed import seed_user_data
     from data.state_store import get_theme
+    from ui.license_dialog import LicenseDialog
     from ui.main_window import MainWindow
     from ui.scroll_guard import install as install_scroll_guard
     from ui.styles import apply_theme
+    from utils import license as license_service
     from utils.app_paths import logo_path
     from utils.ffmpeg_check import ffmpeg_available
 
@@ -146,6 +164,13 @@ def main():
     if icon:
         app.setWindowIcon(QIcon(icon))
     apply_theme(app, get_theme())
+
+    # -------- license gate: no valid activation, no application window -----
+    status = license_service.status()
+    if not status.active:
+        LicenseDialog(status).exec()
+        if not license_service.status().active:
+            sys.exit(0)
 
     try:
         seed_user_data()

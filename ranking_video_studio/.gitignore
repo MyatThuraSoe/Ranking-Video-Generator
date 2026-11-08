@@ -2,6 +2,8 @@
 states/
 templates/
 app_settings.json
+license.json
+license.json.tmp
 
 # Python cache
 __pycache__/

@@ -18,7 +18,7 @@ a = Analysis(
     ],
     hiddenimports=[
         "cairo", "pandas", "numpy", "openpyxl", "PIL",
-        "openpyxl.cell._writer", "PyQt6.QtSvg",
+        "openpyxl.cell._writer", "PyQt6.QtSvg", "cryptography",
     ],
     hookspath=[],
     hooksconfig={},
