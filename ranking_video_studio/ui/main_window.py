@@ -2,7 +2,7 @@ import os
 
 import cairo
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
-from PyQt6.QtGui import QAction, QActionGroup, QColor, QImage, QPixmap
+from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
@@ -19,6 +19,7 @@ from data.state_store import get_theme, set_theme
 from ui import styles
 from ui.default_preset import curated_template
 from ui.preview_viewport import PreviewViewport
+from utils.app_paths import logo_path
 from utils.config import (
     BASE_DURATION, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
     TOP_N, RenderConfig,
@@ -141,6 +142,9 @@ class MainWindow(QWidget):
         self.setWindowTitle("LRBar-RankGen")
         self.resize(1400, 900)
         self.setAcceptDrops(True)
+        logo = logo_path()
+        if logo:
+            self.setWindowIcon(QIcon(logo))
 
         self.df = get_demo_data()
         self.assets = None
@@ -219,10 +223,16 @@ class MainWindow(QWidget):
         hl.setContentsMargins(18, 10, 18, 10)
         hl.setSpacing(12)
 
-        mark = QLabel("LR")
+        mark = QLabel()
         mark.setObjectName("logoMark")
-        mark.setFixedSize(38, 38)
+        mark.setFixedSize(40, 40)
         mark.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        logo = logo_path()
+        pm = QIcon(logo).pixmap(40, 40) if logo else QPixmap()
+        if not pm.isNull():
+            mark.setPixmap(pm)
+        else:
+            mark.setText("LR")
         hl.addWidget(mark)
 
         titles = QVBoxLayout()
@@ -454,6 +464,31 @@ class MainWindow(QWidget):
                                 self.bg_remove_btn, self.bg_image_label))
         gl.addLayout(_slider_row(self.blur_label, self.blur_slider))
         gl.addLayout(_slider_row(self.dim_label, self.dim_slider))
+        self._canvas_img_path = ""
+        self.canvas_image_thumb = QLabel("–")
+        self.canvas_image_thumb.setObjectName("towerThumb")
+        self.canvas_image_thumb.setFixedSize(44, 44)
+        self.canvas_image_thumb.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.canvas_image_label = QLabel("none")
+        self.canvas_image_label.setWordWrap(True)
+        canvas_thumb_row = QHBoxLayout()
+        canvas_thumb_row.setSpacing(10)
+        canvas_thumb_row.addWidget(self.canvas_image_thumb)
+        canvas_thumb_row.addWidget(self.canvas_image_label, 1)
+        gl.addLayout(canvas_thumb_row)
+        self.canvas_image_btn = QPushButton("Add / Change canvas image…")
+        self.canvas_image_btn.setToolTip(
+            "One image covers the whole backdrop — sky, skyline and ground")
+        self.canvas_image_btn.clicked.connect(self._pick_canvas_image)
+        self.canvas_image_remove_btn = QPushButton("Remove")
+        self.canvas_image_remove_btn.setObjectName("towerImgRemove")
+        self.canvas_image_remove_btn.setFixedWidth(86)
+        self.canvas_image_remove_btn.setEnabled(False)
+        self.canvas_image_remove_btn.setToolTip(
+            "Remove the canvas image and restore the scene background")
+        self.canvas_image_remove_btn.clicked.connect(self._remove_canvas_image)
+        gl.addLayout(_row(self.canvas_image_btn, self.canvas_image_remove_btn))
+        gl.addWidget(_mini_label("Full-canvas image — covers sky, skyline and ground"))
         form.addWidget(g)
 
         # 4. Ranking Badges
@@ -661,8 +696,19 @@ class MainWindow(QWidget):
         self.eco_check.setToolTip(
             "Limit FFmpeg to 2 threads so your PC stays quiet and responsive. "
             "Uncheck for Turbo (all cores, faster export).")
+        self._video_path = (store.get_video_save_path()
+                            or self._default_video_path())
+        self.video_path_edit = QLineEdit(self._video_path)
+        self.video_path_edit.setReadOnly(True)
+        self.video_path_edit.setToolTip(self._video_path)
+        self.video_path_edit.setCursorPosition(len(self._video_path))
+        self.video_browse_btn = QPushButton("Browse…")
+        self.video_browse_btn.setToolTip("Choose where the exported video is saved")
+        self.video_browse_btn.clicked.connect(self._browse_video_path)
         gl.addWidget(self.progress_bar)
         gl.addWidget(self.eco_check)
+        gl.addLayout(_field_row("Save to", self.video_path_edit,
+                                self.video_browse_btn))
         gl.addWidget(self.export_btn)
         gl.addLayout(_row(self.frame_btn, self.cancel_btn,
                           stretch_last=False))
@@ -858,6 +904,7 @@ class MainWindow(QWidget):
         cfg.bg_image = getattr(self, "_bg_image_path", "")
         cfg.bg_blur = self.blur_slider.value()
         cfg.bg_dim = self.dim_slider.value()
+        cfg.canvas_image = getattr(self, "_canvas_img_path", "")
         cfg.shadow_enabled = self.shadow_check.isChecked()
         cfg.tower_image = getattr(self, "_tower_img_path", "")
         cfg.avatar_shape = AVATAR_SHAPES[self.avatar_combo.currentText()]
@@ -922,6 +969,7 @@ class MainWindow(QWidget):
             "bg_blur": self.blur_slider.value(),
             "bg_dim": self.dim_slider.value(),
             "bg_image": getattr(self, "_bg_image_path", ""),
+            "canvas_image": getattr(self, "_canvas_img_path", ""),
             "show_badges": self.badge_check.isChecked(),
             "badge_shape": self.badge_shape_combo.currentText(),
             "badge_color": list(self.badge_color_btn.rgb),
@@ -1056,6 +1104,9 @@ class MainWindow(QWidget):
             if "tower_image" in d:
                 self._tower_img_path = str(d["tower_image"])
                 self._refresh_tower_image_ui()
+            if "canvas_image" in d:
+                self._canvas_img_path = str(d["canvas_image"])
+                self._refresh_canvas_image_ui()
             if "audio_file" in d:
                 self._audio_path = str(d["audio_file"])
                 has = bool(self._audio_path)
@@ -1225,6 +1276,43 @@ class MainWindow(QWidget):
         self.assets_sig = None
         self.update_preview()
 
+    # ------------------------------------------------------- canvas image
+    def _refresh_canvas_image_ui(self):
+        path = getattr(self, "_canvas_img_path", "")
+        has = bool(path)
+        self.canvas_image_label.setText(os.path.basename(path) if has else "none")
+        self.canvas_image_remove_btn.setEnabled(has)
+        pm = QPixmap(path) if has and os.path.isfile(path) else QPixmap()
+        if not pm.isNull():
+            self.canvas_image_thumb.setPixmap(pm.scaled(
+                42, 42, Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation))
+            self.canvas_image_thumb.setText("")
+            self.canvas_image_thumb.setToolTip(path)
+        else:
+            self.canvas_image_thumb.setPixmap(QPixmap())
+            self.canvas_image_thumb.setText("–")
+            self.canvas_image_thumb.setToolTip("No full-canvas image")
+
+    def _pick_canvas_image(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Canvas image (covers sky, skyline and ground)",
+            store.get_last_image_dir(),
+            "Images (*.png *.jpg *.jpeg *.webp *.bmp)")
+        if not path:
+            return
+        store.set_last_image_dir(path)
+        self._canvas_img_path = path
+        self._refresh_canvas_image_ui()
+        self.assets_sig = None
+        self.update_preview()
+
+    def _remove_canvas_image(self):
+        self._canvas_img_path = ""
+        self._refresh_canvas_image_ui()
+        self.assets_sig = None
+        self.update_preview()
+
     def _pick_bg_image(self):
         path, _ = QFileDialog.getOpenFileName(
             self, "Background image", "", "Images (*.png *.jpg *.jpeg)")
@@ -1296,6 +1384,29 @@ class MainWindow(QWidget):
     def set_export_enabled(self, enabled):
         self.export_btn.setEnabled(enabled)
 
+    def _default_video_path(self):
+        home = os.path.expanduser("~")
+        videos = os.path.join(home, "Videos")
+        folder = videos if os.path.isdir(videos) else home
+        return os.path.join(folder, "ranking_video.mp4")
+
+    def _refresh_video_path_ui(self):
+        self.video_path_edit.setText(self._video_path)
+        self.video_path_edit.setToolTip(self._video_path)
+        self.video_path_edit.setCursorPosition(len(self._video_path))
+
+    def _browse_video_path(self):
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Choose where to save the video", self._video_path,
+            "MP4 (*.mp4)")
+        if not path:
+            return
+        if not path.lower().endswith(".mp4"):
+            path += ".mp4"
+        self._video_path = path
+        store.set_video_save_path(path)
+        self._refresh_video_path_ui()
+
     def _save_frame_png(self):
         if self.df is None or len(self.df) == 0:
             QMessageBox.warning(self, "No data",
@@ -1334,12 +1445,26 @@ class MainWindow(QWidget):
             return
         if self.export_thread is not None and self.export_thread.isRunning():
             return
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export video", "ranking_video.mp4", "MP4 (*.mp4)")
-        if not path:
-            return
+        path = self._video_path
         if not path.lower().endswith(".mp4"):
             path += ".mp4"
+        if os.path.isfile(path):
+            ans = QMessageBox.question(
+                self, "Overwrite file?",
+                f"This file already exists:\n{path}\n\nOverwrite it?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No)
+            if ans != QMessageBox.StandardButton.Yes:
+                return
+        parent = os.path.dirname(path)
+        if parent and not os.path.isdir(parent):
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except OSError as e:
+                QMessageBox.critical(
+                    self, "Export failed",
+                    f"Cannot create folder:\n{parent}\n{e}")
+                return
         cfg = self.collect_config()
         self.play_timer.stop()
         self.progress_bar.setValue(0)

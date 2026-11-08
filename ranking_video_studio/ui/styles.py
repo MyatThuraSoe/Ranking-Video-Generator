@@ -146,10 +146,8 @@ QWidget#appHeader {
     border-bottom: 1px solid $border;
 }
 QLabel#logoMark {
-    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
-                                stop:0 $accent, stop:1 $accent_hover);
-    color: $accent_text; border-radius: 10px;
-    font-size: 20px; font-weight: 800;
+    background: transparent; border: none; border-radius: 10px;
+    color: $accent; font-size: 20px; font-weight: 800;
 }
 QLabel#appTitle { color: $text; font-size: 19px; font-weight: 700; }
 QLabel#appSubtitle { color: $dim; font-size: 12px; }

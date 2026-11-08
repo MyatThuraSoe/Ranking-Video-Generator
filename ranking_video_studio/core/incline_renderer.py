@@ -375,8 +375,16 @@ def _rounded_rect(ctx, x, y, w, h, r):
     ctx.close_path()
 
 
-def _draw_sky_ground(ctx, cfg, cam, focus_x, skyline_rects, bg_surface):
+def _draw_sky_ground(ctx, cfg, cam, focus_x, skyline_rects, bg_surface,
+                     canvas_surface=None):
     w, h = cfg.width, cfg.height
+    if canvas_surface is not None:
+        # Full-canvas image replaces the whole backdrop: sky, skyline, ground
+        ctx.save()
+        ctx.set_source_surface(canvas_surface, 0, 0)
+        ctx.paint()
+        ctx.restore()
+        return
     far = cam.project((focus_x - 400.0, 0.0, 0.0))
     horizon = far[1] if far else h * 0.42
     horizon = max(h * 0.18, min(h * 0.62, horizon))
@@ -489,7 +497,8 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
 
     _draw_sky_ground(ctx, cfg, cam, cam_x,
                      getattr(assets, "skyline_rects", None),
-                     getattr(assets, "bg_surface", None))
+                     getattr(assets, "bg_surface", None),
+                     getattr(assets, "canvas_surface", None))
 
     # Title (configurable alignment / size / color / top margin)
     if cfg.title and cfg.title.strip():

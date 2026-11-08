@@ -33,6 +33,7 @@ MANIFEST
 *.spec
 # Hand-written build spec is source (build_exe.py needs it), not a generated artifact
 !ranking_video_studio/LRBar-RankGen.spec
+!ranking_video_studio/installer/LRBar-RankGen-Setup.spec
 
 # Installer logs
 pip-log.txt

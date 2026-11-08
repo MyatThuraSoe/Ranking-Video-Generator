@@ -14,6 +14,7 @@ a = Analysis(
     datas=[
         (os.path.join(HERE, "ui", "assets"), os.path.join("ui", "assets")),
         (os.path.join(PACK, "app_icon.png"), "."),
+        (os.path.join(PACK, "seed"), "seed"),
     ],
     hiddenimports=[
         "cairo", "pandas", "numpy", "openpyxl", "PIL",

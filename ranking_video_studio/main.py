@@ -118,11 +118,12 @@ def main():
     from PyQt6.QtGui import QFont, QIcon
     from PyQt6.QtWidgets import QApplication, QMessageBox
 
+    from data.seed import seed_user_data
     from data.state_store import get_theme
     from ui.main_window import MainWindow
     from ui.scroll_guard import install as install_scroll_guard
     from ui.styles import apply_theme
-    from utils.app_paths import resource_path
+    from utils.app_paths import logo_path
     from utils.ffmpeg_check import ffmpeg_available
 
     if os.name == "nt":
@@ -141,10 +142,15 @@ def main():
     # native Windows chrome (which cannot be rounded or themed consistently).
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
-    icon = resource_path("app_icon.png")
-    if os.path.isfile(icon):
+    icon = logo_path()
+    if icon:
         app.setWindowIcon(QIcon(icon))
     apply_theme(app, get_theme())
+
+    try:
+        seed_user_data()
+    except Exception as exc:
+        print(f"[warn] sample seeding skipped: {exc}")
 
     window = MainWindow()
     if not ffmpeg_available():

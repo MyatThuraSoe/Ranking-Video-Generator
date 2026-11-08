@@ -50,6 +50,7 @@ class RenderConfig:
     bg_image: str = ""
     bg_blur: int = 10
     bg_dim: int = 40
+    canvas_image: str = ""       # full-canvas image covering sky, skyline & ground
 
     shadow_enabled: bool = True
 
@@ -107,7 +108,7 @@ class RenderConfig:
         """Fields that require rebuilding pre-rendered assets when changed."""
         return (
             self.width, self.height, self.bg_mode, self.bg_image,
-            self.bg_blur, self.bg_dim, self.avatar_shape,
+            self.bg_blur, self.bg_dim, self.canvas_image, self.avatar_shape,
             self.avatar_border_radius, self.avatar_border_color,
             self.avatar_border_size, self.tower_image,
             self.top_n,

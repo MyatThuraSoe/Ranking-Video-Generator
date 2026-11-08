@@ -42,6 +42,20 @@ def process_background_image(path, w, h, blur, dim):
     return _surface_from_pil(img)
 
 
+def process_canvas_image(path, w, h):
+    """Load an image to cover the ENTIRE canvas (sky, skyline and ground).
+
+    Aspect-fill center-crop to the exact frame size, no blur/dim so the user's
+    picture shows as-is. Returns a Cairo surface or None on failure.
+    """
+    try:
+        img = Image.open(path).convert("RGBA")
+        img = ImageOps.fit(img, (w, h), Image.Resampling.LANCZOS)
+        return _surface_from_pil(img)
+    except Exception:
+        return None
+
+
 def process_tower_bar_image(path, size):
     """Load an image to stand in for the tower/bar body itself (no crop).
 

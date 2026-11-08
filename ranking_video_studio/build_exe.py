@@ -4,15 +4,29 @@ Prepares a branded icon, Windows version metadata and the bundled FFmpeg
 encoder, then runs PyInstaller from LRBar-RankGen.spec. Run with the project
 virtualenv:  python build_exe.py
 """
+import json
 import os
 import shutil
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PACK = os.path.join(HERE, "packaging")
+MASTER_LOGO = os.path.join(HERE, "LRBar RankGen_ Ranking Video Magic.ico")
+
+
+def _icon_from_master(master, out_dir):
+    """Use the user-supplied logo as the single source of branding truth."""
+    from PIL import Image
+    img = Image.open(master)
+    img.size = (256, 256)
+    img.convert("RGBA").save(os.path.join(out_dir, "app_icon.png"), "PNG")
+    shutil.copy2(master, os.path.join(out_dir, "app_icon.ico"))
 
 
 def make_icon(out_dir):
+    if os.path.isfile(MASTER_LOGO):
+        _icon_from_master(MASTER_LOGO, out_dir)
+        return
     import numpy as np
     from PIL import Image, ImageDraw, ImageFilter
 
@@ -105,6 +119,30 @@ def write_version_info(out_dir):
         fh.write(text)
 
 
+def write_setup_version_info(out_dir):
+    text = """VSVersionInfo(
+  ffi=FixedFileInfo(
+    filevers=(1, 0, 0, 0), prodvers=(1, 0, 0, 0), mask=0x3f, flags=0x0,
+    OS=0x40004, fileType=0x1, subtype=0x0, date=(0, 0)),
+  kids=[
+    StringFileInfo([StringTable('040904B0', [
+      StringStruct('CompanyName', 'LRBar'),
+      StringStruct('FileDescription', 'LRBar-RankGen Setup'),
+      StringStruct('FileVersion', '1.0.0'),
+      StringStruct('InternalName', 'LRBar-RankGen-Setup'),
+      StringStruct('LegalCopyright', 'Copyright (c) 2026 LRBar'),
+      StringStruct('OriginalFilename', 'LRBar-RankGen-Setup.exe'),
+      StringStruct('ProductName', 'LRBar-RankGen'),
+      StringStruct('ProductVersion', '1.0.0')])]),
+    VarFileInfo([VarStruct('Translation', [1033, 1200])])
+  ]
+)
+"""
+    with open(os.path.join(out_dir, "setup_version_info.txt"), "w",
+              encoding="utf-8") as fh:
+        fh.write(text)
+
+
 def stage_ffmpeg(out_dir):
     src = shutil.which("ffmpeg")
     if not src:
@@ -115,12 +153,60 @@ def stage_ffmpeg(out_dir):
     return dst
 
 
+def stage_seed(out_dir):
+    """Bundle the current templates, sample logos and a portable sample dataset.
+
+    Image paths in sample_data.json are bare filenames so first-run seeding can
+    resolve them against the installed sample_assets folder on any machine.
+    """
+    from data.demo_data import SAMPLE_ROWS
+
+    seed = os.path.join(out_dir, "seed")
+    tpl_src = os.path.join(HERE, "templates")
+    tpl_dst = os.path.join(seed, "templates")
+    os.makedirs(tpl_dst, exist_ok=True)
+    if os.path.isdir(tpl_src):
+        for fn in os.listdir(tpl_src):
+            if fn.endswith(".json"):
+                shutil.copy2(os.path.join(tpl_src, fn),
+                             os.path.join(tpl_dst, fn))
+
+    assets_src = os.path.join(HERE, "sample_assets")
+    assets_dst = os.path.join(seed, "sample_assets")
+    os.makedirs(assets_dst, exist_ok=True)
+    if os.path.isdir(assets_src):
+        for fn in os.listdir(assets_src):
+            if os.path.isfile(os.path.join(assets_src, fn)):
+                shutil.copy2(os.path.join(assets_src, fn),
+                             os.path.join(assets_dst, fn))
+
+    records = [{"name": n, "score": str(s), "text": t, "image": f,
+                "extratext": ""} for n, s, t, f in SAMPLE_ROWS]
+    with open(os.path.join(seed, "sample_data.json"), "w",
+              encoding="utf-8") as fh:
+        json.dump(records, fh, ensure_ascii=False, indent=1)
+    return seed
+
+
+def build_installer():
+    """Package the shippable exe into the branded per-user setup wizard."""
+    import PyInstaller.__main__ as pyi
+    pyi.run([
+        os.path.join(HERE, "installer", "LRBar-RankGen-Setup.spec"),
+        "--noconfirm",
+        "--distpath", os.path.join(HERE, "dist"),
+        "--workpath", os.path.join(HERE, "build"),
+    ])
+
+
 def main():
     os.makedirs(PACK, exist_ok=True)
     make_icon(PACK)
     write_version_info(PACK)
+    write_setup_version_info(PACK)
     stage_ffmpeg(PACK)
-    print("Prepared icon, version info and bundled FFmpeg in", PACK)
+    stage_seed(PACK)
+    print("Prepared icon, version info, bundled FFmpeg and sample seed in", PACK)
     import PyInstaller.__main__ as pyi
     pyi.run([
         os.path.join(HERE, "LRBar-RankGen.spec"),
@@ -128,6 +214,8 @@ def main():
         "--distpath", os.path.join(HERE, "dist"),
         "--workpath", os.path.join(HERE, "build"),
     ])
+    build_installer()
+    print("Built dist/LRBar-RankGen.exe and dist/LRBar-RankGen-Setup.exe")
 
 
 if __name__ == "__main__":

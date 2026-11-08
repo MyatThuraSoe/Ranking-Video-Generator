@@ -305,6 +305,16 @@ def set_last_image_dir(path):
     _save_settings(settings)
 
 
+def get_video_save_path():
+    return _load_settings().get("video_save_path", "")
+
+
+def set_video_save_path(path):
+    settings = _load_settings()
+    settings["video_save_path"] = str(path)
+    _save_settings(settings)
+
+
 def get_theme():
     return _load_settings().get("theme", "Bright")
 

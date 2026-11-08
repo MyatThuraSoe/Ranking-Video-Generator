@@ -12,10 +12,18 @@ class SceneAssets:
 
     def __init__(self):
         self.bg_surface = None
+        self.canvas_surface = None
 
 
 def build_assets(cfg, df):
     assets = SceneAssets()
+
+    if getattr(cfg, "canvas_image", "") and os.path.isfile(cfg.canvas_image):
+        try:
+            assets.canvas_surface = ap.process_canvas_image(
+                cfg.canvas_image, cfg.width, cfg.height)
+        except Exception as e:
+            print(f"[warn] canvas image failed: {e}")
 
     if cfg.bg_mode == "image" and cfg.bg_image and os.path.isfile(cfg.bg_image):
         try:
