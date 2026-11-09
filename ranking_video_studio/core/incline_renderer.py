@@ -604,9 +604,41 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                           False, getattr(cfg, "extra_color", (0.80, 0.82, 0.85)),
                           1.3, 0.0))
 
-        gap = 0.16
-        plate_y = h - (0.45 if show_badges else 0.30)   # flow top; badge sits above
-        avail = max(0.5, plate_y - 0.15)
+        margin = 0.15          # clear space between neighbouring tower elements
+        gap = 0.18             # margin between stacked face text blocks
+
+        # Size the rank badge FIRST so the face flow can reserve room below it
+        # and the badge stays inside the tower top instead of spilling onto the
+        # name plate or floating above the bar.
+        badge_half = 0.0
+        badge_y = h
+        badge_top = h
+        badge_metrics = None
+        if show_badges:
+            label = str(i + 1)
+            ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
+                                 cairo.FONT_WEIGHT_BOLD)
+            bfs = cfg.rank_font_size * scale
+            ctx.set_font_size(bfs)
+            xb, yb, twd, thd, _, _ = ctx.text_extents(label)
+            pad = 6 * scale
+            bs = getattr(cfg, "badge_size", 1.0)
+            if cfg.badge_shape == "circle":
+                half_px = max(max(twd, thd) / 2 + pad * 0.4,
+                              (max(twd, thd) / 2 + pad) * bs)
+            elif cfg.badge_shape == "pill":
+                half_px = max(thd + pad * 0.6, (thd + pad * 1.5) * bs) / 2
+            else:
+                half_px = thd / 2
+            # Cap the badge so it never eats more than ~a third of a short bar.
+            badge_half = min(half_px / max(1e-6, s),
+                             max(0.05, (h - 2 * margin) * 0.35))
+            badge_y = h - margin - badge_half     # top edge a margin below tower top
+            badge_top = badge_y + badge_half      # == h - margin
+            badge_metrics = (label, xb, yb, twd, thd, bfs, pad, bs)
+
+        plate_y = (badge_y - badge_half - margin) if show_badges else (h - margin)
+        avail = max(0.15, plate_y - margin)
 
         def measure(k):
             laid, total = [], 0.0
@@ -646,29 +678,24 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                             pr[1] - (len(lines) - 1) * lh * s / 2, lh * s)
             cursor -= bh + gap * k
 
-        # Rank badge on the face (respects the Badges group)
-        if getattr(cfg, "show_badges", True):
-            badge_y = min(h - 0.25, plate_y + 0.62)
+        # Rank badge on the face, drawn at the position reserved above. The
+        # face flow changed the font, so restore the badge font before drawing.
+        if badge_metrics is not None:
+            label, xb, yb, twd, thd, bfs, pad, bs = badge_metrics
+            ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
+                                 cairo.FONT_WEIGHT_BOLD)
+            ctx.set_font_size(bfs)
+            draw_half = badge_half * s
             bc = cam.project((x, badge_y, -hd - 0.02))
             if bc:
-                label = str(i + 1)
-                ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
-                                     cairo.FONT_WEIGHT_BOLD)
-                bfs = cfg.rank_font_size * scale
-                ctx.set_font_size(bfs)
-                xb, yb, twd, thd, _, _ = ctx.text_extents(label)
                 if cfg.badge_shape != "text":
-                    pad = 6 * scale
-                    bs = getattr(cfg, "badge_size", 1.0)
                     ctx.set_source_rgb(*cfg.badge_color)
                     if cfg.badge_shape == "circle":
-                        r = max(max(twd, thd) / 2 + pad * 0.4,
-                                (max(twd, thd) / 2 + pad) * bs)
-                        ctx.arc(bc[0], bc[1], r, 0, 6.2831853)
+                        ctx.arc(bc[0], bc[1], draw_half, 0, 6.2831853)
                         ctx.fill()
                     else:  # pill
                         bw = max(twd + pad * 0.8, (twd + pad * 2.4) * bs)
-                        bh = max(thd + pad * 0.6, (thd + pad * 1.5) * bs)
+                        bh = draw_half * 2
                         _rounded_rect(ctx, bc[0] - bw / 2, bc[1] - bh / 2,
                                       bw, bh, bh / 2)
                         ctx.fill()
@@ -676,12 +703,14 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                 ctx.move_to(bc[0] - twd / 2 - xb, bc[1] - thd / 2 - yb)
                 ctx.show_text(label)
 
-        # Logo floating above the top
+        # Logo floating above the tower top, separated by a clear margin. The
+        # billboard is bottom-anchored, so logo_y is where its bottom edge sits.
         logo = getattr(assets, "incline_logos", {}).get(i)
         if logo is not None:
-            top = cam.project((x, h + 0.25, 0))
+            world_h = 1.6 * getattr(cfg, "avatar_size", 1.0)
+            logo_y = max(h, badge_top) + margin
+            top = cam.project((x, logo_y, 0))
             if top:
-                world_h = 1.6 * getattr(cfg, "avatar_size", 1.0)
                 _billboard_surface(ctx, logo, top[0], top[1], world_h, top[2], alpha=1.0)
 
         # Waving flag on the top-right corner (sprite pre-warped once)
