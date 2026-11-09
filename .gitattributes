@@ -1,0 +1,6 @@
+# Line endings for cross-platform scripts:
+#  - shell scripts and desktop entries must stay LF (bash breaks on CRLF).
+#  - .bat files must stay CRLF (cmd.exe mis-parses LF-only batch files).
+*.sh text eol=lf
+*.desktop text eol=lf
+*.bat text eol=crlf

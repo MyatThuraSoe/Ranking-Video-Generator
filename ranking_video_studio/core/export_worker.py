@@ -39,15 +39,25 @@ class VideoExportThread(QThread):
         ]
         has_audio = bool(cfg.audio_file)
         if has_audio:
-            # Input-level -t bounds the infinite loop; without it ffmpeg
-            # never sees audio EOF and -shortest hangs the muxer.
-            cmd += ["-stream_loop", "-1", "-t", f"{cfg.duration:.2f}",
+            tempo = max(50, min(200, cfg.audio_speed)) / 100.0
+            # atempo divides the track length by `tempo`, so sped-up music must
+            # read proportionally more source audio or it would fall silent
+            # before the video ends. Input-level -t also bounds the infinite
+            # loop; without it ffmpeg never sees audio EOF and -shortest hangs
+            # the muxer.
+            source_dur = cfg.duration * tempo + 2.0
+            cmd += ["-stream_loop", "-1", "-t", f"{source_dur:.2f}",
                     "-i", cfg.audio_file]
             fade_start = max(0.0, cfg.duration - 1.5)
             vol = max(10, min(150, cfg.audio_volume)) / 100.0
+            chain = []
+            if tempo != 1.0:
+                chain.append(f"atempo={tempo:.2f}")
+            chain.append(f"volume={vol:.2f}")
+            chain.append(f"afade=t=out:st={fade_start:.2f}:d=1.5")
             cmd += [
                 "-filter_complex",
-                f"[1:a]volume={vol:.2f},afade=t=out:st={fade_start:.2f}:d=1.5[aout]",
+                f"[1:a]{','.join(chain)}[aout]",
             ]
         cmd += ["-map", "0:v:0"]
         if has_audio:

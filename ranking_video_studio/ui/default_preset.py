@@ -67,6 +67,7 @@ _FALLBACK = {
     "avatar_border_color": [1.0, 1.0, 1.0],
     "avatar_border_size": 0,
     "audio_volume": 100,
+    "audio_speed": 100,
 }
 
 
@@ -83,7 +84,9 @@ def curated_template(row_count=None):
             with open(path, "r", encoding="utf-8") as fh:
                 loaded = json.load(fh).get("settings", {})
             if isinstance(loaded, dict) and loaded:
-                settings = dict(loaded)
+                # Layer over the fallback so a packaged template saved before a
+                # setting existed still resets that setting to its default.
+                settings = {**_FALLBACK, **loaded}
         except (OSError, ValueError):
             pass
     top_n = TOP_N

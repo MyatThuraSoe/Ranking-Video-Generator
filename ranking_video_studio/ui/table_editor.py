@@ -68,7 +68,7 @@ class DatasetTableEditor(QDialog):
         bar = QHBoxLayout()
         self.import_btn = QPushButton("Import CSV / Excel")
         self.import_btn.setToolTip("Replace the table with a .csv / .xlsx file "
-                                   f"(max {MAX_ROWS} rows, ranked by score)")
+                                   f"(max {MAX_ROWS} rows; row order = ranking)")
         self.export_btn = QPushButton("Export CSV")
         self.export_btn.setToolTip("Save the current table as a .csv file")
         self.add_btn = QPushButton("+ Add Row")
@@ -97,7 +97,7 @@ class DatasetTableEditor(QDialog):
         hh.setSectionResizeMode(COL_NAME, QHeaderView.ResizeMode.Interactive)
         self.table.setColumnWidth(COL_NAME, 170)
         hh.setSectionResizeMode(COL_SCORE, QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(COL_SCORE, 100)
+        self.table.setColumnWidth(COL_SCORE, 120)
         hh.setSectionResizeMode(COL_TEXT, QHeaderView.ResizeMode.Stretch)
         hh.setSectionResizeMode(COL_IMAGE, QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(COL_IMAGE, 250)
@@ -125,7 +125,7 @@ class DatasetTableEditor(QDialog):
         root.addLayout(state_bar)
 
         foot = QHBoxLayout()
-        hint = QLabel("Rows are ranked by score when applied to the video")
+        hint = QLabel("Row order is the ranking — first row is #1. Scores can be any text.")
         hint.setObjectName("hintLabel")
         foot.addWidget(hint)
         foot.addStretch(1)
@@ -238,17 +238,7 @@ class DatasetTableEditor(QDialog):
             return
         text = item.text()
         if col == COL_SCORE:
-            try:
-                value = float(text.replace(",", "").strip() or 0)
-            except ValueError:
-                item.setBackground(QColor(styles.current_palette()["danger"]))
-                item.setForeground(QColor("#ffffff"))
-                self._set_status(f"Row {row + 1}: score must be a number — "
-                                 "keeping the previous value", error=True)
-                return
-            item.setData(Qt.ItemDataRole.BackgroundRole, None)
-            item.setData(Qt.ItemDataRole.ForegroundRole, None)
-            self._records[row]["score"] = str(value)
+            self._records[row]["score"] = text
         elif col == COL_NAME:
             self._records[row]["name"] = text
         elif col == COL_TEXT:
@@ -263,7 +253,7 @@ class DatasetTableEditor(QDialog):
         if len(self._records) >= MAX_ROWS:
             self._set_status(f"Maximum of {MAX_ROWS} rows reached", error=True)
             return
-        self._records.append({"name": "", "score": "0", "text": "",
+        self._records.append({"name": "", "score": "", "text": "",
                               "image": "", "extratext": ""})
         self._populate()
         last = len(self._records) - 1
@@ -287,7 +277,7 @@ class DatasetTableEditor(QDialog):
         for r in rows:
             del self._records[r]
         if not self._records:
-            self._records.append({"name": "", "score": "0", "text": "",
+            self._records.append({"name": "", "score": "", "text": "",
                                   "image": "", "extratext": ""})
         self._populate()
         self._touch()
@@ -346,7 +336,7 @@ class DatasetTableEditor(QDialog):
             return
         if not path.lower().endswith(".csv"):
             path += ".csv"
-        df = self._sorted_df()
+        df = self._ordered_df()
         df.to_csv(path, index=False)
         self._set_status(f"Exported {len(df)} rows to {os.path.basename(path)}")
 
@@ -406,7 +396,7 @@ class DatasetTableEditor(QDialog):
             self._project_name = mgr.renamed_to
         if action == "new":
             self._project_name = name
-            self._records = [{"name": "", "score": "0", "text": "",
+            self._records = [{"name": "", "score": "", "text": "",
                               "image": "", "extratext": ""}]
             self._populate()
             self._update_project_chip()
@@ -435,7 +425,7 @@ class DatasetTableEditor(QDialog):
             QMessageBox.critical(self, "Open failed", str(e))
             return
         if not self._records:
-            self._records = [{"name": "", "score": "0", "text": "",
+            self._records = [{"name": "", "score": "", "text": "",
                               "image": "", "extratext": ""}]
         self._project_name = name
         self._populate()
@@ -473,10 +463,8 @@ class DatasetTableEditor(QDialog):
         styles.set_prop(self.status_label, "error", "true" if error else "false")
 
     # ---------------------------------------------------------------- apply
-    def _sorted_df(self):
-        df = store.records_to_df(self._records)
-        return df.sort_values("score", ascending=False,
-                              kind="stable").reset_index(drop=True)
+    def _ordered_df(self):
+        return store.records_to_df(self._records)
 
     def _apply(self):
         if not any(str(r.get("name", "")).strip() for r in self._records):
@@ -484,7 +472,7 @@ class DatasetTableEditor(QDialog):
                              error=True)
             return
         self._flush_autosave()
-        self._result_df = self._sorted_df()
+        self._result_df = self._ordered_df()
         self.accept()
 
     def result_df(self):

@@ -1,0 +1,7 @@
+PyQt6
+pycairo
+pandas
+openpyxl
+Pillow
+numpy
+cryptography

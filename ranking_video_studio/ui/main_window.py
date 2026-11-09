@@ -1,4 +1,5 @@
 import os
+import re
 
 import cairo
 from PyQt6.QtCore import Qt, QTimer, pyqtSignal
@@ -6,8 +7,9 @@ from PyQt6.QtGui import QAction, QActionGroup, QColor, QIcon, QImage, QPixmap
 from PyQt6.QtWidgets import (
     QApplication, QCheckBox, QColorDialog, QComboBox, QDialog, QDoubleSpinBox,
     QFileDialog, QGroupBox, QHBoxLayout, QInputDialog, QLabel,
-    QLineEdit, QMenuBar, QMessageBox, QProgressBar, QPushButton, QScrollArea,
-    QSizePolicy, QSlider, QSpinBox, QSplitter, QToolButton, QVBoxLayout, QWidget,
+    QLineEdit, QMenuBar, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollArea, QSizePolicy, QSlider, QSpinBox, QSplitter, QToolButton,
+    QVBoxLayout, QWidget,
 )
 
 from core.export_worker import VideoExportThread
@@ -97,7 +99,7 @@ def _field_row(label, *controls):
     cap.setFixedWidth(124)
     lay.addWidget(cap)
     expands = bool(controls) and isinstance(
-        controls[0], (QComboBox, QLineEdit, QSlider))
+        controls[0], (QComboBox, QLineEdit, QPlainTextEdit, QSlider))
     for i, w in enumerate(controls):
         lay.addWidget(w, 1 if (expands and i == 0) else 0)
     if not expands:
@@ -406,13 +408,15 @@ class MainWindow(QWidget):
         self.preset_combo.setCurrentIndex(1)
         self.preset_combo.setToolTip("FFmpeg encode speed (faster = bigger file)")
         self.speed_spin = QDoubleSpinBox()
-        self.speed_spin.setRange(0.25, 4.0)
-        self.speed_spin.setSingleStep(0.25)
+        self.speed_spin.setRange(0.025, 4.0)
+        self.speed_spin.setSingleStep(0.025)
+        self.speed_spin.setDecimals(3)
         self.speed_spin.setValue(1.0)
         self.speed_spin.setSuffix("x")
         self.speed_spin.setToolTip(
-            "Camera pan speed; faster camera = shorter video "
-            f"(duration = {BASE_DURATION:.0f}s / speed)")
+            "Camera pan speed; slower camera = longer video "
+            f"(duration = {BASE_DURATION:.0f}s / speed). "
+            "0.025x–4x in 0.025 steps; type any value for fine control.")
         self.duration_label = QLabel(f"{BASE_DURATION:.1f} s")
         self.duration_label.setToolTip("Resulting video duration")
         gl.addLayout(_field_row("Aspect / Resolution", self.aspect_combo))
@@ -426,8 +430,10 @@ class MainWindow(QWidget):
         # 3. Background & Canvas
         g = QGroupBox("3. Background && Canvas")
         gl = _group_layout(g)
-        self.title_edit = QLineEdit("TOP RANKINGS")
-        self.title_edit.setToolTip("Video title shown at the top")
+        self.title_edit = QPlainTextEdit("TOP RANKINGS")
+        self.title_edit.setToolTip("Video title shown at the top; press Enter for a line break")
+        self.title_edit.setFixedHeight(58)
+        self.title_edit.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.title_align_combo = QComboBox()
         self.title_align_combo.addItems(TITLE_ALIGNS.keys())
         self.title_align_combo.setToolTip("Horizontal alignment of the title")
@@ -563,6 +569,13 @@ class MainWindow(QWidget):
         self.volume_slider.setValue(100)
         self.volume_slider.setToolTip("Music volume (10-150%)")
         self.volume_label = _value_label("Volume: 100%")
+        self.audio_speed_slider = QSlider(Qt.Orientation.Horizontal)
+        self.audio_speed_slider.setRange(50, 200)
+        self.audio_speed_slider.setValue(100)
+        self.audio_speed_slider.setToolTip(
+            "Music playback speed (50-200%). Pitch stays the same, "
+            "so the track keeps its original key.")
+        self.audio_speed_label = _value_label("Music speed: 100%")
         self.easing_combo = QComboBox()
         self.easing_combo.addItems(EASING_OPTIONS.keys())
         self.easing_combo.setToolTip("Animation easing curve")
@@ -578,44 +591,46 @@ class MainWindow(QWidget):
         gl.addLayout(_field_row("Music", self.audio_btn,
                                 self.audio_remove_btn, self.audio_label))
         gl.addLayout(_slider_row(self.volume_label, self.volume_slider))
+        gl.addLayout(_slider_row(self.audio_speed_label,
+                                 self.audio_speed_slider))
         gl.addLayout(_field_row("Easing", self.easing_combo))
 
         # 6. Camera & Scene (Incline 3D Towers)
         gl = self._collapsible_group(
             form, "Camera && Scene (Incline 3D Towers)", expanded=False)
         self.cam_elev_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cam_elev_slider.setRange(10, 80)
+        self.cam_elev_slider.setRange(0, 150)
         self.cam_elev_slider.setValue(35)
         self.cam_elev_slider.setToolTip(
-            "How high the camera flies ABOVE the tracked tower top (1.0-8.0)")
+            "How high the camera flies ABOVE the tracked tower top (0.0-15.0)")
         self.cam_elev_label = _value_label("Camera Elevation: 3.5")
         self.cam_dist_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cam_dist_slider.setRange(150, 500)
+        self.cam_dist_slider.setRange(50, 1000)
         self.cam_dist_slider.setValue(260)
         self.cam_dist_slider.setToolTip(
-            "How far back the camera sits from the row (15.0-50.0)")
+            "How far back the camera sits from the row (5.0-100.0)")
         self.cam_dist_label = _value_label("Camera Distance: 26.0")
         self.cam_ahead_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cam_ahead_slider.setRange(0, 100)
+        self.cam_ahead_slider.setRange(0, 200)
         self.cam_ahead_slider.setValue(12)
         self.cam_ahead_slider.setToolTip(
-            "Aim ahead toward incoming towers; 0 looks back along the row (0.0-10.0)")
+            "Aim ahead toward incoming towers; 0 looks back along the row (0.0-20.0)")
         self.cam_ahead_label = _value_label("Look-Ahead: 1.2")
         self.cam_focus_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cam_focus_slider.setRange(-10, 20)
+        self.cam_focus_slider.setRange(-50, 100)
         self.cam_focus_slider.setValue(5)
         self.cam_focus_slider.setToolTip(
-            "Look-at height above the tower top; raise to frame logos (-1.0-2.0)")
+            "Look-at height above the tower top; raise to frame logos (-5.0-10.0)")
         self.cam_focus_label = _value_label("Focus Offset: 0.5")
         self.cams_slider = QSlider(Qt.Orientation.Horizontal)
-        self.cams_slider.setRange(0, 120)
+        self.cams_slider.setRange(0, 240)
         self.cams_slider.setValue(19)
-        self.cams_slider.setToolTip("Lateral offset = incline angle (0.0-12.0)")
+        self.cams_slider.setToolTip("Lateral offset = incline angle (0.0-24.0)")
         self.cams_label = _value_label("Incline Angle: 1.9")
         self.fov_slider = QSlider(Qt.Orientation.Horizontal)
-        self.fov_slider.setRange(60, 180)
+        self.fov_slider.setRange(30, 300)
         self.fov_slider.setValue(105)
-        self.fov_slider.setToolTip("Zoom / field of view (0.6-1.8)")
+        self.fov_slider.setToolTip("Zoom / field of view (0.3-3.0)")
         self.fov_label = _value_label("Zoom / FOV: 1.05")
         self.tower_color_btn = ColorButton((0.80, 0.76, 0.64))
         self.tower_color_btn.setToolTip("Tower face color")
@@ -707,8 +722,19 @@ class MainWindow(QWidget):
         self.eco_check.setToolTip(
             "Limit FFmpeg to 2 threads so your PC stays quiet and responsive. "
             "Uncheck for Turbo (all cores, faster export).")
-        self._video_path = (store.get_video_save_path()
-                            or self._default_video_path())
+        saved = store.get_video_save_path()
+        if saved:
+            self._video_folder = os.path.dirname(saved)
+            base = os.path.splitext(os.path.basename(saved))[0]
+        else:
+            self._video_folder = self._default_video_folder()
+            base = "ranking_video"
+        self.video_name_edit = QLineEdit(base)
+        self.video_name_edit.setToolTip(
+            "File name for the exported video; .mp4 is added automatically")
+        self.video_name_edit.textChanged.connect(self._on_video_name_changed)
+        self.video_name_edit.editingFinished.connect(self._persist_video_path)
+        self._video_path = os.path.join(self._video_folder, base + ".mp4")
         self.video_path_edit = QLineEdit(self._video_path)
         self.video_path_edit.setReadOnly(True)
         self.video_path_edit.setToolTip(self._video_path)
@@ -718,6 +744,7 @@ class MainWindow(QWidget):
         self.video_browse_btn.clicked.connect(self._browse_video_path)
         gl.addWidget(self.progress_bar)
         gl.addWidget(self.eco_check)
+        gl.addLayout(_field_row("File name", self.video_name_edit))
         gl.addLayout(_field_row("Save to", self.video_path_edit,
                                 self.video_browse_btn))
         gl.addWidget(self.export_btn)
@@ -870,6 +897,8 @@ class MainWindow(QWidget):
             lambda v: self.avatar_border_size_label.setText(f"Border: {v}%"))
         self.volume_slider.valueChanged.connect(
             lambda v: self.volume_label.setText(f"Volume: {v}%"))
+        self.audio_speed_slider.valueChanged.connect(
+            self._update_audio_speed_label)
         self.speed_spin.valueChanged.connect(
             lambda _v: self.duration_label.setText(
                 f"{self._video_duration():.1f} s"))
@@ -898,7 +927,7 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------------------- config
     def _video_duration(self):
-        return BASE_DURATION / max(0.05, self.speed_spin.value())
+        return BASE_DURATION / max(0.025, self.speed_spin.value())
 
     def collect_config(self):
         cfg = RenderConfig()
@@ -907,7 +936,7 @@ class MainWindow(QWidget):
         cfg.crf = QUALITY_PRESETS[self.quality_combo.currentText()]
         cfg.fps = FPS_OPTIONS[self.fps_combo.currentIndex()]
         cfg.duration = self._video_duration()
-        cfg.title = self.title_edit.text()
+        cfg.title = self.title_edit.toPlainText()
         cfg.title_align = TITLE_ALIGNS[self.title_align_combo.currentText()]
         cfg.title_font_size = self.title_size_spin.value()
         cfg.title_color = self.title_color_btn.rgb
@@ -939,6 +968,7 @@ class MainWindow(QWidget):
         cfg.extra_color = self.extra_color_btn.rgb
         cfg.audio_file = getattr(self, "_audio_path", "")
         cfg.audio_volume = self.volume_slider.value()
+        cfg.audio_speed = self.audio_speed_slider.value()
         cfg.speed = self.speed_spin.value()
         cfg.easing = EASING_OPTIONS[self.easing_combo.currentText()]
         cfg.cam_elevation = self.cam_elev_slider.value() / 10.0
@@ -972,7 +1002,7 @@ class MainWindow(QWidget):
             "preset": self.preset_combo.currentText(),
             "low_resource": self.eco_check.isChecked(),
             "speed": self.speed_spin.value(),
-            "title": self.title_edit.text(),
+            "title": self.title_edit.toPlainText(),
             "title_align": self.title_align_combo.currentText(),
             "title_size": self.title_size_spin.value(),
             "title_color": list(self.title_color_btn.rgb),
@@ -995,6 +1025,7 @@ class MainWindow(QWidget):
             "avatar_border_size": self.avatar_border_size_slider.value(),
             "audio_file": getattr(self, "_audio_path", ""),
             "audio_volume": self.volume_slider.value(),
+            "audio_speed": self.audio_speed_slider.value(),
             "easing": self.easing_combo.currentText(),
             "cam_elev": self.cam_elev_slider.value(),
             "cam_dist": self.cam_dist_slider.value(),
@@ -1042,7 +1073,10 @@ class MainWindow(QWidget):
 
             def text(w, key):
                 if key in d:
-                    w.setText(str(d[key]))
+                    if hasattr(w, "setPlainText"):
+                        w.setPlainText(str(d[key]))
+                    else:
+                        w.setText(str(d[key]))
 
             def check(w, key):
                 if key in d:
@@ -1080,6 +1114,7 @@ class MainWindow(QWidget):
             color(self.avatar_border_color_btn, "avatar_border_color")
             num(self.avatar_border_size_slider, "avatar_border_size")
             num(self.volume_slider, "audio_volume")
+            num(self.audio_speed_slider, "audio_speed")
             combo(self.easing_combo, "easing")
             num(self.cam_elev_slider, "cam_elev")
             num(self.cam_dist_slider, "cam_dist")
@@ -1162,6 +1197,11 @@ class MainWindow(QWidget):
             action, name = dlg.chosen
             if action == "apply":
                 self.apply_template(store.load_template(name))
+
+    def _update_audio_speed_label(self, value):
+        hint = ("slower" if value < 100 else
+                "faster" if value > 100 else "normal")
+        self.audio_speed_label.setText(f"Music speed: {value}%  ({hint})")
 
     # -------------------------------------------------------------- preview
     def _on_setting_changed(self, *_args):
@@ -1440,11 +1480,27 @@ class MainWindow(QWidget):
     def set_export_enabled(self, enabled):
         self.export_btn.setEnabled(enabled)
 
-    def _default_video_path(self):
+    def _default_video_folder(self):
         home = os.path.expanduser("~")
         videos = os.path.join(home, "Videos")
-        folder = videos if os.path.isdir(videos) else home
-        return os.path.join(folder, "ranking_video.mp4")
+        return videos if os.path.isdir(videos) else home
+
+    def _clean_name(self, text):
+        name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "", text)
+        name = " ".join(name.split()).strip(" .")
+        return name[:80] or "ranking_video"
+
+    def _recompute_video_path(self):
+        self._video_path = os.path.join(
+            self._video_folder,
+            self._clean_name(self.video_name_edit.text()) + ".mp4")
+        self._refresh_video_path_ui()
+
+    def _on_video_name_changed(self, *_):
+        self._recompute_video_path()
+
+    def _persist_video_path(self):
+        store.set_video_save_path(self._video_path)
 
     def _refresh_video_path_ui(self):
         self.video_path_edit.setText(self._video_path)
@@ -1459,9 +1515,10 @@ class MainWindow(QWidget):
             return
         if not path.lower().endswith(".mp4"):
             path += ".mp4"
-        self._video_path = path
-        store.set_video_save_path(path)
-        self._refresh_video_path_ui()
+        self._video_folder = os.path.dirname(path)
+        self.video_name_edit.setText(os.path.splitext(os.path.basename(path))[0])
+        self._recompute_video_path()
+        self._persist_video_path()
 
     def _save_frame_png(self):
         if self.df is None or len(self.df) == 0:

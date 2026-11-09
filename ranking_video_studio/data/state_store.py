@@ -64,20 +64,16 @@ def records_to_df(records):
     import pandas as pd
     rows = []
     for rec in records:
-        try:
-            score = float(str(rec.get("score", "0")).replace(",", ""))
-        except (TypeError, ValueError):
-            score = 0.0
         rows.append({
             "name": str(rec.get("name", "")),
-            "score": score,
+            "score": str(rec.get("score", "")),
             "text": str(rec.get("text", "")),
             "image": str(rec.get("image", "")),
             "extratext": str(rec.get("extratext", "")),
             "flag": str(rec.get("flag", "")),
         })
     if not rows:
-        rows = [{"name": "", "score": 0.0, "text": "", "image": "",
+        rows = [{"name": "", "score": "", "text": "", "image": "",
                  "extratext": "", "flag": ""}]
     return pd.DataFrame(rows)
 

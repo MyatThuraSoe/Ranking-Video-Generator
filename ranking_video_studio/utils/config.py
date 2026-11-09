@@ -82,6 +82,7 @@ class RenderConfig:
     # audio
     audio_file: str = ""
     audio_volume: int = 100
+    audio_speed: int = 100  # percent, 50..200; pitch-preserving
 
     # ---- Incline 3D tower camera ----
     cam_elevation: float = 3.5     # camera height ABOVE the tracked tower top

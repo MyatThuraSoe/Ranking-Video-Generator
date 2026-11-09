@@ -6,7 +6,8 @@ from utils.config import MAX_ROWS
 
 
 def load_dataset(path):
-    """Load CSV/Excel, validate, sort by score desc. Returns DataFrame.
+    """Load CSV/Excel and validate, keeping the maker's row order and score
+    text as-is (row order is the ranking; scores may be any format).
 
     Raises ValueError with a human-readable message on bad input.
     """
@@ -35,10 +36,9 @@ def load_dataset(path):
             f"Found columns: {', '.join(df.columns)}")
 
     df = df.copy()
-    df["score"] = pd.to_numeric(df["score"], errors="coerce")
-    df = df.dropna(subset=["score"])
+    df["score"] = df["score"].fillna("").astype(str)
     if len(df) == 0:
-        raise ValueError("No rows with a valid numeric 'score' found.")
+        raise ValueError("No data rows found in the file.")
     df["name"] = df["name"].fillna("").astype(str)
     if "text" not in df.columns:
         df["text"] = ""
@@ -53,5 +53,5 @@ def load_dataset(path):
     df["flag"] = df["flag"].fillna("").astype(str)
     df["extratext"] = df["extratext"].fillna("").astype(str)
 
-    df = df.sort_values("score", ascending=False).head(MAX_ROWS).reset_index(drop=True)
+    df = df.head(MAX_ROWS).reset_index(drop=True)
     return df

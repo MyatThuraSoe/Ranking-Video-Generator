@@ -15,6 +15,7 @@ import cairo
 
 from core.easing import calculate_progress
 from utils.config import TOP_N
+from utils.score_format import display_value, numeric_value
 
 # ---- World layout (metres) ----
 SLOT    = 3.2     # distance between tower centres along X
@@ -438,21 +439,28 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
     # so the reveal spans the whole clip: progress 0..1 == start..leader.
     t = min(1.0, progress)
 
-    max_score = float(df["score"].iloc[0]) or 1.0
-    if max_score <= 0:
-        max_score = 1.0
+    # Row order is the ranking (the CSV maker owns it). Heights are
+    # proportional when every score parses as a number; otherwise they step
+    # down in listed order so row 1 stays the tallest hero tower.
+    values = [numeric_value(df.iloc[i]["score"]) for i in range(n)]
+    if all(v is not None for v in values):
+        max_score = max(values) or 1.0
+        if max_score <= 0:
+            max_score = 1.0
+        fracs = [v / max_score for v in values]
+    else:
+        fracs = [(n - i) / n for i in range(n)]
 
     # --- STATIC TOWERS (fully built; no growth). Computed first because the
     # camera elevation tracks the height of the tower it is currently passing. ---
     tower_pts = []   # (x, height) for smoothstep focus tracking
     towers = []
     for i in range(n):
-        score = float(df.iloc[i]["score"])
-        h_final = MIN_H + (MAX_H - MIN_H) * (score / max_score)
-        # Rank N (smallest) on the left, Rank 1 (biggest) on the right
+        h_final = MIN_H + (MAX_H - MIN_H) * fracs[i]
+        # Rank N (last row) on the left, Rank 1 (first row) on the right
         x = (n - 1 - i) * SLOT
         tower_pts.append((x, h_final))
-        towers.append(dict(i=i, x=x, h=h_final, score=score, row=df.iloc[i]))
+        towers.append(dict(i=i, x=x, h=h_final, row=df.iloc[i]))
     tower_pts.sort(key=lambda p: p[0])     # ascending x for interpolation
 
     # --- CINEMATIC CAMERA ---------------------------------------------
@@ -500,23 +508,29 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                      getattr(assets, "bg_surface", None),
                      getattr(assets, "canvas_surface", None))
 
-    # Title (configurable alignment / size / color / top margin)
+    # Title (configurable alignment / size / color / top margin; multi-line)
     if cfg.title and cfg.title.strip():
         ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
-        ctx.set_font_size(getattr(cfg, "title_font_size", 40) * scale)
+        font_px = getattr(cfg, "title_font_size", 40) * scale
+        ctx.set_font_size(font_px)
         ctx.set_source_rgb(*getattr(cfg, "title_color", (1, 1, 1)))
-        xb, yb, twd, thd, _, _ = ctx.text_extents(cfg.title)
         side = 26 * scale
         align = getattr(cfg, "title_align", "left")
-        if align == "center":
-            tx = (cfg.width - twd) / 2 - xb
-        elif align == "right":
-            tx = cfg.width - side - twd - xb
-        else:
-            tx = side - xb
-        ty = getattr(cfg, "title_top_margin", 24) * scale - yb
-        ctx.move_to(tx, ty)
-        ctx.show_text(cfg.title)
+        top = getattr(cfg, "title_top_margin", 24) * scale
+        line_h = font_px * 1.25
+        for li, line in enumerate(cfg.title.split("\n")):
+            if not line.strip():
+                continue
+            xb, yb, twd, thd, _, _ = ctx.text_extents(line)
+            if align == "center":
+                tx = (cfg.width - twd) / 2 - xb
+            elif align == "right":
+                tx = cfg.width - side - twd - xb
+            else:
+                tx = side - xb
+            ty = top + li * line_h - yb
+            ctx.move_to(tx, ty)
+            ctx.show_text(line)
 
     # Depth-sort for painter's algorithm (needs the positioned camera)
     for tw in towers:
@@ -573,8 +587,8 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
         extra = tw["row"].get("extratext")
         extra = "" if extra is None or str(extra).lower() == "nan" else str(extra)
         dec = getattr(cfg, "value_decimals", 1)
-        num = f"{tw['score']:,.{dec}f}" if dec > 0 else f"{int(round(tw['score'])):,}"
-        value_label = f"{cfg.value_prefix}{num}{cfg.value_suffix}"
+        value_label = display_value(tw["row"]["score"], cfg.value_prefix,
+                                    cfg.value_suffix, dec)
         show_badges = getattr(cfg, "show_badges", True)
         # (kind, text, world font size, serif-bold, color, line factor, pad)
         specs = [("plate", name, getattr(cfg, "name_font_size", 0.34), True,

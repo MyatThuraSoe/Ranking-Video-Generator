@@ -1,0 +1,5 @@
+# Line endings for the Linux build: shell scripts and desktop files must stay
+# LF no matter which platform checks them out; Python keeps the repo's LF
+# storage but is checked out per-platform.
+*.sh text eol=lf
+*.desktop text eol=lf

@@ -22,7 +22,7 @@ def get_demo_data():
         image = os.path.join(folder, filename) if folder else ""
         if image and not os.path.isfile(image):
             image = ""
-        rows.append({"name": name, "score": score, "text": text,
+        rows.append({"name": name, "score": str(score), "text": text,
                      "image": image, "extratext": ""})
     return pd.DataFrame(rows, columns=["name", "score", "text", "image",
                                        "extratext"])

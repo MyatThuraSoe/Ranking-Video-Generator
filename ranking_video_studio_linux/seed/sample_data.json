@@ -1,0 +1,44 @@
+[
+ {
+  "name": "Python",
+  "score": "9850",
+  "text": "AI & Data Science",
+  "image": "python-logo.jpg",
+  "extratext": ""
+ },
+ {
+  "name": "JavaScript",
+  "score": "8740",
+  "text": "Web Engine King",
+  "image": "JavaScript-logo.png",
+  "extratext": ""
+ },
+ {
+  "name": "C++",
+  "score": "7600",
+  "text": "High Performance",
+  "image": "ISO_C++_Logo.svg.webp",
+  "extratext": ""
+ },
+ {
+  "name": "Rust",
+  "score": "6900",
+  "text": "Systems Programming",
+  "image": "rust logo.webp",
+  "extratext": ""
+ },
+ {
+  "name": "Go",
+  "score": "6400",
+  "text": "Cloud Native",
+  "image": "Go-Logo_Blue.png",
+  "extratext": ""
+ },
+ {
+  "name": "Java",
+  "score": "5800",
+  "text": "Enterprise Backbone",
+  "image": "Java-Logo.jpg",
+  "extratext": ""
+ }
+]
