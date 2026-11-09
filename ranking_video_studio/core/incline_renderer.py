@@ -14,15 +14,17 @@ import random
 import cairo
 
 from core.easing import calculate_progress
+from core.scaling import compute_fractions, scale_note
 from utils.config import TOP_N
-from utils.score_format import display_value, numeric_value
+from utils.score_format import display_value, numeric_value, wants_compact
 
 # ---- World layout (metres) ----
-SLOT    = 3.2     # distance between tower centres along X
-TOWER_W = 2.4     # tower width  (X axis)
+SLOT    = 4.2     # distance between tower centres along X
+TOWER_W = 2.6     # width of the SHORTEST tower (X axis)
+TOWER_W_MAX = 3.7 # width of the tallest tower: leaders get a bigger face for text
 TOWER_D = 2.4     # tower depth  (Z axis)
 MAX_H   = 9.5     # height of the #1 tower
-MIN_H   = 1.2     # minimum visible height
+MIN_H   = 1.2     # legacy minimum; cfg.min_tower_h overrides (see render)
 
 _HORISON_COL = (0.62, 0.66, 0.70)   # fog / distance fade colour
 
@@ -102,6 +104,10 @@ def _pan_segments(tower_pts, x_min, x_max):
         h1 = _focus_height(tower_pts, min(clamp, b1 + SLOT * 0.9))
         jump = max(0.0, h1 - h0) / MAX_H
         weight = length * (1.0 + 0.45 * (h1 / MAX_H) + 1.10 * jump)
+        # Suspense: linger on the last three reveals (#3, #2, then the leader)
+        from_end = max(0.0, (x_max - b1) / SLOT)
+        if from_end < 3.0:
+            weight *= 1.0 + 0.85 * (3.0 - from_end) / 3.0
         segs.append((b0, b1, total, weight))
         total += weight
     return segs, total
@@ -188,11 +194,89 @@ def _adaptive_pan_x(e, segs, total, x_min, x_max):
     return _monotone_eval(min(1.0, max(0.0, e)), us, xs, m)
 
 
+def _clamp01(x):
+    return 0.0 if x < 0.0 else (1.0 if x > 1.0 else x)
+
+
+def _smoothstep(x):
+    x = _clamp01(x)
+    return x * x * (3.0 - 2.0 * x)
+
+
+def _smootherstep(x):
+    x = _clamp01(x)
+    return x * x * x * (x * (x * 6.0 - 15.0) + 10.0)
+
+
+def _trapezoid_ease(u, ramp=0.08):
+    """Position for a trapezoid velocity profile: soft start, steady cruise,
+    soft stop. With many towers the old cubic ease-out flew past the first
+    half of the list; this keeps a near-constant, readable pace."""
+    u = _clamp01(u)
+    r = max(1e-3, min(0.45, ramp))
+    k = 1.0 - r
+    if u < r:
+        return 0.5 * u * u / r / k
+    if u > 1.0 - r:
+        d = 1.0 - u
+        return 1.0 - 0.5 * d * d / r / k
+    return (0.5 * r + (u - r)) / k
+
+
+def _pan_ease(u, style, n):
+    """Pan progress: user easing for short lists, steady cruise for long ones."""
+    if n > 12:
+        return _trapezoid_ease(u)
+    return calculate_progress(u, style)
+
+
+def _smax(a, b, k):
+    """Smooth maximum (C1): clamps without a velocity hitch."""
+    return 0.5 * (a + b + math.sqrt((a - b) * (a - b) + k * k))
+
+
+def _avg_focus_height(xs_hs, x, spread):
+    """Box-filtered tower height around x: smooths the auto-zoom so the dolly
+    never twitches as individual towers pass."""
+    pts = (-1.0, -0.5, 0.0, 0.5, 1.0)
+    return sum(_focus_height(xs_hs, x + p * spread) for p in pts) / len(pts)
+
+
+def _pill_text(ctx, text, cx, cy, px, fg, bg, alpha=1.0, bold=True, pad=0.55):
+    """Centred text on a rounded dark pill (used for footnote / callout)."""
+    if not text or alpha <= 0.01:
+        return
+    ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL,
+                         cairo.FONT_WEIGHT_BOLD if bold else cairo.FONT_WEIGHT_NORMAL)
+    ctx.set_font_size(px)
+    xb, yb, tw, th, _, _ = ctx.text_extents(text)
+    pw, ph = tw + px * pad * 2.0, th + px * pad * 1.2
+    _rounded_rect(ctx, cx - pw / 2, cy - ph / 2, pw, ph, ph / 2)
+    ctx.set_source_rgba(bg[0], bg[1], bg[2], 0.62 * alpha)
+    ctx.fill()
+    ctx.set_source_rgba(fg[0], fg[1], fg[2], alpha)
+    ctx.move_to(cx - tw / 2 - xb, cy - th / 2 - yb)
+    ctx.show_text(text)
+
+
+def _draw_vignette(ctx, w, h, strength):
+    if strength <= 0.01:
+        return
+    diag = math.hypot(w, h) / 2.0
+    g = cairo.RadialGradient(w / 2, h / 2, diag * 0.50, w / 2, h / 2, diag)
+    g.add_color_stop_rgba(0, 0, 0, 0, 0.0)
+    g.add_color_stop_rgba(1, 0, 0, 0, min(0.85, strength))
+    ctx.set_source(g)
+    ctx.rectangle(0, 0, w, h)
+    ctx.fill()
+
+
 class Camera:
     """Simple look-at perspective camera."""
 
     def __init__(self, w, h, focal):
         self.w, self.h, self.f = w, h, focal
+        self.shift_y = 0.0       # lens shift (px): recentres without tilting
         self.pos = (0.0, 0.0, 0.0)
         self.right = (1.0, 0.0, 0.0)
         self.up = (0.0, 1.0, 0.0)
@@ -212,7 +296,7 @@ class Camera:
             return None
         s = self.f / z
         return (self.w * 0.5 + _dot(d, self.right) * s,
-                self.h * 0.5 - _dot(d, self.up) * s,
+                self.h * 0.5 + self.shift_y - _dot(d, self.up) * s,
                 s, z)
 
 
@@ -353,6 +437,16 @@ def _draw_lines(ctx, lines, cx, first_cy, line_h):
         ctx.show_text(ln)
 
 
+_REF_PX = 200.0
+
+
+def _ref_width(ctx, serif_bold, text, px):
+    """Width of ``text`` at ``px`` measured from a large reference size, so the
+    result is linear in px (no small-size hinting jitter between towers)."""
+    _set_face_font(ctx, serif_bold, _REF_PX)
+    return ctx.text_extents(text)[4] * (px / _REF_PX)
+
+
 def _set_face_font(ctx, serif_bold, px):
     if serif_bold:
         ctx.select_font_face("Serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
@@ -388,7 +482,7 @@ def _draw_sky_ground(ctx, cfg, cam, focus_x, skyline_rects, bg_surface,
         return
     far = cam.project((focus_x - 400.0, 0.0, 0.0))
     horizon = far[1] if far else h * 0.42
-    horizon = max(h * 0.18, min(h * 0.62, horizon))
+    horizon = max(h * 0.30, min(h * 0.66, horizon))
 
     if cfg.bg_mode == "image" and bg_surface is not None:
         # User photo (already blurred/dimmed) as the scene backdrop
@@ -435,88 +529,143 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
     if n == 0:
         return
     scale = cfg.scale()
-    # Camera speed is applied via the video duration (BASE_DURATION / speed),
-    # so the reveal spans the whole clip: progress 0..1 == start..leader.
-    t = min(1.0, progress)
+    W, H = cfg.width, cfg.height
 
-    # Row order is the ranking (the CSV maker owns it). Heights are
-    # proportional when every score parses as a number; otherwise they step
-    # down in listed order so row 1 stays the tallest hero tower.
+    # ---- Timeline: [intro establishing shot] [pan across towers] [hero hold]
+    dur = max(0.1, float(getattr(cfg, "duration", 8.0)))
+    intro_f = min(float(getattr(cfg, "intro_seconds", 1.4)), dur * 0.15) / dur
+    outro_f = min(float(getattr(cfg, "outro_seconds", 3.2)), dur * 0.30) / dur
+    t = _clamp01(progress)
+    u_pan = _clamp01((t - intro_f) / max(1e-6, 1.0 - intro_f - outro_f))
+    intro_u = _clamp01(t / intro_f) if intro_f > 1e-6 else 1.0
+    outro_u = _clamp01((t - (1.0 - outro_f)) / outro_f) if outro_f > 1e-6 else 0.0
+    t_sec = t * dur
+
+    # Row order is the ranking (the CSV maker owns it). Heights use a scale
+    # chosen for the data's dynamic range (log for million-vs-billion gaps);
+    # non-numeric scores step down in listed order so row 1 stays tallest.
     values = [numeric_value(df.iloc[i]["score"]) for i in range(n)]
-    if all(v is not None for v in values):
-        max_score = max(values) or 1.0
-        if max_score <= 0:
-            max_score = 1.0
-        fracs = [v / max_score for v in values]
+    numeric = all(v is not None for v in values)
+    scale_mode = "rank"
+    if numeric:
+        fracs, scale_mode = compute_fractions(
+            values, getattr(cfg, "scale_mode", "auto"),
+            getattr(cfg, "rank_blend", 0.12))
     else:
         fracs = [(n - i) / n for i in range(n)]
+    min_h = max(0.4, min(MAX_H - 1.0, getattr(cfg, "min_tower_h", 3.2)))
+    compact = numeric and wants_compact(
+        getattr(cfg, "value_compact", "auto"), values, cfg.value_suffix)
 
     # --- STATIC TOWERS (fully built; no growth). Computed first because the
     # camera elevation tracks the height of the tower it is currently passing. ---
     tower_pts = []   # (x, height) for smoothstep focus tracking
     towers = []
     for i in range(n):
-        h_final = MIN_H + (MAX_H - MIN_H) * fracs[i]
+        h_final = min_h + (MAX_H - min_h) * fracs[i]
         # Rank N (last row) on the left, Rank 1 (first row) on the right
         x = (n - 1 - i) * SLOT
         tower_pts.append((x, h_final))
-        towers.append(dict(i=i, x=x, h=h_final, row=df.iloc[i]))
+        fh = (h_final - min_h) / max(1e-6, MAX_H - min_h)
+        w_i = TOWER_W + (TOWER_W_MAX - TOWER_W) * _clamp01(fh)
+        towers.append(dict(i=i, x=x, h=h_final, w=w_i, row=df.iloc[i]))
     tower_pts.sort(key=lambda p: p[0])     # ascending x for interpolation
 
     # --- CINEMATIC CAMERA ---------------------------------------------
-    # The towers never move, so ALL motion comes from the camera: a lateral
-    # pan whose pace adapts to tower height, while the elevation leads the
-    # pan and rises toward each incoming tower top.
-    e = calculate_progress(t, cfg.easing)
+    e = _pan_ease(u_pan, cfg.easing, n)
     x_min = 0.0
     leader_x = (n - 1) * SLOT                # tallest tower (rank 1) centre
     x_max = max(x_min, leader_x - SLOT * 1.2)   # pan end, framed on the leader
     segs, total = _pan_segments(tower_pts, x_min, x_max)
     cam_x = _adaptive_pan_x(e, segs, total, x_min, x_max)
 
-    # Rise BEFORE arriving, smoothly. The elevation reads the tower height a
-    # fixed distance ahead of the pan; _focus_height smoothsteps between tower
-    # tops (and flattens to zero slope at the leader), so the climb is a
-    # continuous glide -- no snap when a tall bar enters the frame.
     height_x = min(leader_x, cam_x + SLOT * 1.1)
     h_focus = _focus_height(tower_pts, height_x)
     cam_elev = getattr(cfg, "cam_elevation", 3.5)
     look_ahead = getattr(cfg, "cam_look_ahead", 1.2)
     focus_off = getattr(cfg, "cam_focus_offset", 0.5)
     cam_dist = cfg.cam_distance
+    cam_side = getattr(cfg, "cam_side", 1.9)
+    focal = max(W, H) * getattr(cfg, "cam_fov", 1.05)
 
-    # Look back along the row (near tower right, row receding to the
-    # upper-left like the sample). Over the last fifth of the pan the base aim
-    # settles onto the leader so its nameplate/value end fully in frame.
-    # look_ahead is added ON TOP of that base: full influence while panning
-    # (aims toward incoming towers), bounded once settled so the leader stays
-    # framed but the control still responds at the end of the timeline.
     settle = max(0.0, (e - 0.8) / 0.2)
     settle = settle * settle * (3.0 - 2.0 * settle)
     base_x = _lerp(cam_x - SLOT * 1.2, leader_x - SLOT * 0.55, settle)
     ahead = _lerp(look_ahead, min(look_ahead, SLOT * 0.62), settle)
-    look_x = base_x + ahead
-    look_y = h_focus + focus_off           # lock onto the top context data
-    focal = max(cfg.width, cfg.height) * getattr(cfg, "cam_fov", 1.05)
-    cam = Camera(cfg.width, cfg.height, focal)
-    cam.look_at(
-        (cam_x + getattr(cfg, "cam_side", 1.9), h_focus + cam_elev, -cam_dist),
-        (look_x, look_y, 0.0))
+    look_x = _smax(base_x + ahead, x_min + SLOT * 0.35, SLOT * 0.9)
+
+    # Auto-framing: dolly so the tower being revealed (plus its logo) fills a
+    # fixed share of the frame. Small towers get a close-up instead of floating
+    # tiny in the distance; the user's camera distance stays the far limit.
+    h_look = _focus_height(tower_pts, min(leader_x, look_x + SLOT * 0.6))
+    if getattr(cfg, "cam_auto_frame", True):
+        h_avg = _avg_focus_height(tower_pts, height_x, SLOT * 0.9)
+        logo_h = 1.6 * getattr(cfg, "avatar_size", 1.0) \
+            if getattr(assets, "incline_logos", None) else 0.6
+        # leave room above the leader for the winner-reveal card in the finale
+        extent = h_avg + logo_h + 1.0 + 2.4 * _smootherstep(outro_u)
+        fill = max(0.3, min(0.9, getattr(cfg, "cam_frame_fill", 0.68)))
+        z_v = focal * extent / (fill * H)                  # fit height
+        z_h = focal * (SLOT * 2.1) / W                     # keep >= ~2 slots wide
+        z = max(z_v, z_h, getattr(cfg, "cam_min_distance", 8.0))
+        # "Camera distance" is a zoom trim here (19.5 = neutral)
+        z *= max(0.6, min(1.7, cam_dist / 19.5))
+        elev_eff = cam_elev * max(0.45, min(1.0, z / 19.5))
+        # aim at the middle of tower + logo so the composition is centred
+        look_y = (h_look + logo_h) * 0.5 + (focus_off - 0.5)
+    else:
+        z = cam_dist
+        elev_eff = cam_elev
+        look_y = h_focus + focus_off
+
+    # -- establishing shot: start high & wide, crane down into the pan
+    k_in = 1.0 - _smootherstep(intro_u)
+    z *= 1.0 + 0.40 * k_in
+    elev_eff += 3.2 * k_in
+    # -- hero finale: slow push-in with a gentle orbit toward the leader
+    k_out = _smootherstep(outro_u)
+    z *= 1.0 - 0.05 * k_out
+    cam_side += 1.2 * k_out
+    elev_eff -= 0.4 * k_out
+    # -- subtle handheld drift keeps long holds alive
+    sway = getattr(cfg, "cam_sway", 1.0)
+    if sway > 0:
+        cam_side += 0.30 * sway * math.sin(2 * math.pi * 0.23 * t_sec)
+        elev_eff += 0.10 * sway * math.sin(2 * math.pi * 0.31 * t_sec + 1.1)
+
+    cam = Camera(W, H, focal)
+    cam_y = h_focus + elev_eff
+    # Level camera + lens shift (architectural look): the camera barely pitches,
+    # so tower edges stay vertical instead of leaning; the shift then puts the
+    # subject back at a title-safe spot a little below the frame centre.
+    level = max(0.0, min(1.0, getattr(cfg, "cam_level", 0.85)))
+    cam.look_at((cam_x + cam_side, cam_y, -z),
+                (look_x, _lerp(look_y, cam_y, level), 0.0))
+    anchor = cam.project((look_x, look_y, 0.0))
+    if anchor:
+        cam.shift_y = H * (0.54 - 0.01 * k_out) - anchor[1]
+    cam_dist = z       # fog / depth cues follow the actual camera distance
+
+    # Which tower is "on stage": follows the pan, locks to the leader at the end
+    spot_x = _lerp(cam_x + SLOT * 0.9, leader_x, settle)
 
     _draw_sky_ground(ctx, cfg, cam, cam_x,
                      getattr(assets, "skyline_rects", None),
                      getattr(assets, "bg_surface", None),
                      getattr(assets, "canvas_surface", None))
 
-    # Title (configurable alignment / size / color / top margin; multi-line)
+    title_bottom = 36 * scale
+    # Title (alignment / size / color / top margin; multi-line); slides in
     if cfg.title and cfg.title.strip():
         ctx.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         font_px = getattr(cfg, "title_font_size", 40) * scale
         ctx.set_font_size(font_px)
-        ctx.set_source_rgb(*getattr(cfg, "title_color", (1, 1, 1)))
+        t_ease = _smootherstep(intro_u * 1.25)
+        tc = getattr(cfg, "title_color", (1, 1, 1))
         side = 26 * scale
         align = getattr(cfg, "title_align", "left")
         top = getattr(cfg, "title_top_margin", 24) * scale
+        top -= (1.0 - t_ease) * font_px * 1.6          # drop in from above
         line_h = font_px * 1.25
         for li, line in enumerate(cfg.title.split("\n")):
             if not line.strip():
@@ -529,8 +678,14 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
             else:
                 tx = side - xb
             ty = top + li * line_h - yb
+            # soft shadow keeps the title readable over any background
+            ctx.set_source_rgba(0, 0, 0, 0.35 * t_ease)
+            ctx.move_to(tx + 2 * scale, ty + 2 * scale)
+            ctx.show_text(line)
+            ctx.set_source_rgba(tc[0], tc[1], tc[2], t_ease)
             ctx.move_to(tx, ty)
             ctx.show_text(line)
+            title_bottom = max(title_bottom, top + (li + 1) * line_h)
 
     # Depth-sort for painter's algorithm (needs the positioned camera)
     for tw in towers:
@@ -539,15 +694,35 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
     towers.sort(key=lambda d: -d["z"])     # far -> near
 
     base = cfg.tower_color
+    spot_strength = max(0.0, min(0.8, getattr(cfg, "spotlight", 0.28)))
     for tw in towers:
         x, h, i = tw["x"], tw["h"], tw["i"]
+
+        # Cull towers that cannot be seen (50-100 items stay fast to render)
+        pc = cam.project((x, h * 0.5, 0.0))
+        if pc is None:
+            continue
+        half_px = tw["w"] * pc[2] * 1.3
+        if pc[0] < -half_px * 2.5 or pc[0] > W + half_px * 2.5:
+            continue
+
+        # Spotlight: towers away from the one on stage dim slightly
+        emph = math.exp(-(((x - spot_x) / (SLOT * 1.7)) ** 2))
+        dim = spot_strength * (1.0 - emph)
+
         fog = max(0.0, min(0.55, (tw["z"] - cam_dist * 0.8) / 45.0))
         c_front = _mix(base, _HORISON_COL, fog)
         c_side = _mix((base[0] * 0.72, base[1] * 0.72, base[2] * 0.72), _HORISON_COL, fog)
         c_top = _mix((min(1, base[0] * 1.14), min(1, base[1] * 1.14), min(1, base[2] * 1.14)),
                      _HORISON_COL, fog)
+        if dim > 0.0:
+            shade = (0.10, 0.11, 0.16)
+            c_front = _mix(c_front, shade, dim)
+            c_side = _mix(c_side, shade, dim)
+            c_top = _mix(c_top, shade, dim)
 
-        hw, hd = TOWER_W / 2.0, TOWER_D / 2.0
+        hw, hd = tw["w"] / 2.0, TOWER_D / 2.0
+        wscale = tw["w"] / TOWER_W      # on-face text grows with the face
 
         # Ground shadow (sun from left); toggled by the Drop-shadow checkbox
         if getattr(cfg, "shadow_enabled", True):
@@ -580,7 +755,7 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
             s = front[0][2]                # pixels-per-world-unit at this depth
 
         # Face text: top-down flow layout so wrapped blocks never collide.
-        face_w = max(8.0, TOWER_W * s * 0.86)
+        face_w = max(8.0, tw["w"] * s * 0.86)
         name = str(tw["row"]["name"])
         sub = tw["row"].get("text")
         sub = "" if sub is None or str(sub).lower() == "nan" else str(sub)
@@ -588,7 +763,7 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
         extra = "" if extra is None or str(extra).lower() == "nan" else str(extra)
         dec = getattr(cfg, "value_decimals", 1)
         value_label = display_value(tw["row"]["score"], cfg.value_prefix,
-                                    cfg.value_suffix, dec)
+                                    cfg.value_suffix, dec, compact=compact)
         show_badges = getattr(cfg, "show_badges", True)
         # (kind, text, world font size, serif-bold, color, line factor, pad)
         specs = [("plate", name, getattr(cfg, "name_font_size", 0.34), True,
@@ -640,9 +815,30 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
         plate_y = (badge_y - badge_half - margin) if show_badges else (h - margin)
         avail = max(0.15, plate_y - margin)
 
+        # Per-line width fit, decided ONCE at k=1 so it never depends on depth
+        # or on how much the block later shrinks: neighbouring towers therefore
+        # wrap the same way. A short name shrinks (down to 78%) to stay on one
+        # line, otherwise it wraps on word boundaries -- never mid-word.
+        boost = max(0.6, min(1.8, getattr(cfg, "text_boost", 1.12))) * wscale
+        fits = []
+        for kind, txt, fw, serif, col, lf, pad in specs:
+            fk = 1.0
+            px0 = fw * boost * s
+            if kind == "plate" and "\n" not in txt:
+                one = _ref_width(ctx, serif, txt, px0)
+                if one > face_w and one * 0.78 <= face_w:
+                    fk = face_w / one
+            words = txt.split()
+            if words:
+                ww = max(_ref_width(ctx, serif, wd, px0 * fk) for wd in words)
+                if ww > face_w:
+                    fk *= face_w / ww
+            fits.append(fk)
+
         def measure(k):
             laid, total = [], 0.0
-            for kind, txt, fw, serif, col, lf, pad in specs:
+            for (kind, txt, fw, serif, col, lf, pad), fk in zip(specs, fits):
+                fw = fw * boost * fk
                 _set_face_font(ctx, serif, fw * k * s)
                 lines = _wrap_text(ctx, txt, face_w)
                 lh = fw * k * lf
@@ -731,3 +927,71 @@ def render_incline_frame(ctx, cfg, df, assets, progress):
                 ctx.set_source_surface(flag, 0, 0)
                 ctx.paint()
                 ctx.restore()
+
+    # ------------------------------------------------ winner reveal card (#1)
+    pop = _smootherstep((outro_u - 0.10) / 0.35)
+    if pop > 0.01:
+        lead = next((t_ for t_ in towers if t_["i"] == 0), None)
+        if lead is not None:
+            logo_up = 1.6 * getattr(cfg, "avatar_size", 1.0) + 0.35 \
+                if getattr(assets, "incline_logos", {}).get(0) is not None else 0.0
+            top_y = lead["h"] + logo_up + 0.55
+            pa = cam.project((lead["x"], top_y, 0.0))
+            if pa:
+                sc = pa[2] * (0.88 + 0.12 * pop)
+                cw, ch = 5.0 * sc, 1.75 * sc
+                cx, cy = pa[0], pa[1] - ch / 2.0 - (1.0 - pop) * 0.6 * sc
+                pc_ = cfg.plate_color
+                _rounded_rect(ctx, cx - cw / 2, cy - ch / 2, cw, ch, 0.22 * sc)
+                ctx.set_source_rgba(pc_[0], pc_[1], pc_[2], 0.94 * pop)
+                ctx.fill_preserve()
+                bc_ = getattr(cfg, "badge_color", (1.0, 0.76, 0.16))
+                ctx.set_source_rgba(bc_[0], bc_[1], bc_[2], pop)
+                ctx.set_line_width(max(2.0, 0.07 * sc))
+                ctx.stroke()
+                nm = str(lead["row"]["name"])
+                vl = display_value(lead["row"]["score"], cfg.value_prefix,
+                                   cfg.value_suffix, getattr(cfg, "value_decimals", 1),
+                                   compact=compact)
+                inner = cw * 0.9
+                npx = 0.66 * sc
+                w_ = _ref_width(ctx, True, nm, npx)
+                if w_ > inner:
+                    npx *= inner / w_
+                vpx = 0.60 * sc
+                w_ = _ref_width(ctx, True, vl, vpx)
+                if w_ > inner:
+                    vpx *= inner / w_
+                nc_ = getattr(cfg, "name_color", (1, 1, 1))
+                _set_face_font(ctx, True, npx)
+                ctx.set_source_rgba(nc_[0], nc_[1], nc_[2], pop)
+                _draw_lines(ctx, [nm], cx, cy - ch * 0.20, npx)
+                _set_face_font(ctx, True, vpx)
+                ctx.set_source_rgba(bc_[0], bc_[1], bc_[2], pop)
+                _draw_lines(ctx, [vl], cx, cy + ch * 0.22, vpx)
+
+    # ---------------------------------------------------------- post / overlays
+    _draw_vignette(ctx, W, H, getattr(cfg, "vignette", 0.30) * (1.0 + 0.5 * k_out))
+
+    fade_in = _smootherstep(intro_u / 0.6)
+    # Vertical (Shorts / Reels): the platform UI covers the bottom ~17%
+    safe_bottom = H * 0.17 if H > W * 1.3 else 0.0
+    note = scale_note(scale_mode) if numeric else ""
+    if note and getattr(cfg, "show_scale_note", True):
+        _pill_text(ctx, note, W / 2, H - 34 * scale - safe_bottom, 22 * scale,
+                   (1, 1, 1), (0, 0, 0), alpha=0.9 * fade_in, bold=False)
+
+    if (getattr(cfg, "show_gap_callout", True) and numeric and n > 1
+            and values[n - 1] > 0 and outro_u > 0.25):
+        ratio = values[0] / values[n - 1]
+        if ratio >= 2.0:
+            r_txt = f"{ratio:,.0f}" if ratio >= 100 else f"{ratio:,.1f}"
+            _pill_text(ctx, f"#1 is {r_txt}\u00d7 bigger than #{n}",
+                       W / 2, H - 84 * scale - safe_bottom, 34 * scale,
+                       getattr(cfg, "badge_color", (1.0, 0.76, 0.16)),
+                       (0, 0, 0), alpha=_smootherstep((outro_u - 0.25) / 0.4))
+
+    if intro_u < 1.0:                      # fade in from black
+        ctx.set_source_rgba(0, 0, 0, 1.0 - fade_in)
+        ctx.rectangle(0, 0, W, H)
+        ctx.fill()

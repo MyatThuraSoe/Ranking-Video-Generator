@@ -31,10 +31,40 @@ def numeric_value(raw):
     return float(match.group(1)) * _MULTIPLIERS.get(match.group(2).lower(), 1)
 
 
-def display_value(raw, prefix, suffix, decimals):
+_COMPACT = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
+
+
+def compact_number(x):
+    """200000000 -> '200M', 30000 -> '30K', 4278166 -> '4.28M'."""
+    ax = abs(x)
+    for div, suf in _COMPACT:
+        if ax >= div:
+            v = x / div
+            d = 2 if abs(v) < 10 else (1 if abs(v) < 100 else 0)
+            txt = f"{v:.{d}f}"
+            if "." in txt:
+                txt = txt.rstrip("0").rstrip(".")
+            return txt + suf
+    return f"{x:,.0f}" if float(x).is_integer() else f"{x:,.2f}"
+
+
+def wants_compact(mode, values, suffix):
+    """auto: compact big numbers unless the user supplied their own unit."""
+    mode = str(mode or "auto").lower()
+    if mode in ("on", "true", "yes"):
+        return True
+    if mode in ("off", "false", "no"):
+        return False
+    nums = [abs(v) for v in values if v is not None]
+    return bool(nums) and max(nums) >= 1e5 and not str(suffix or "").strip()
+
+
+def display_value(raw, prefix, suffix, decimals, compact=False):
     plain = plain_number(raw)
     if plain is None:
         return str(raw).strip()
+    if compact:
+        return f"{prefix}{compact_number(plain)}{suffix}"
     if decimals > 0:
         num = f"{plain:,.{decimals}f}"
     else:

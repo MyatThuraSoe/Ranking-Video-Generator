@@ -25,7 +25,7 @@ from ui.preview_viewport import PreviewViewport
 from utils import license as license_service
 from utils.app_paths import logo_path
 from utils.config import (
-    BASE_DURATION, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
+    BASE_DURATION, compute_duration, ENCODE_PRESETS, FPS_OPTIONS, QUALITY_PRESETS, RESOLUTIONS,
     TOP_N, RenderConfig,
 )
 
@@ -35,6 +35,15 @@ EASING_OPTIONS = {
     "Exponential Dramatic": "exponential",
     "Linear Steady": "linear",
 }
+SCALE_MODES = {
+    "Auto (recommended)": "auto",
+    "Linear": "linear",
+    "Square root": "sqrt",
+    "Logarithmic (huge gaps)": "log",
+    "Rank order (equal steps)": "rank",
+}
+COMPACT_MODES = {"Auto": "auto", "Always (200M)": "on",
+                 "Never (200,000,000)": "off"}
 BG_MODES = {"Sky Gradient": "sky", "Custom Image": "image"}
 TITLE_ALIGNS = {"Left": "left", "Center": "center", "Right": "right"}
 BADGE_SHAPES = {"Pill": "pill", "Circle": "circle", "Plain Text": "text"}
@@ -414,8 +423,9 @@ class MainWindow(QWidget):
         self.speed_spin.setValue(1.0)
         self.speed_spin.setSuffix("x")
         self.speed_spin.setToolTip(
-            "Camera pan speed; slower camera = longer video "
-            f"(duration = {BASE_DURATION:.0f}s / speed). "
+            "Camera pan speed; slower camera = longer video. Length scales "
+            "with the number of items (see SECONDS_PER_ITEM in utils/config.py), "
+            "divided by this speed. "
             "0.025x–4x in 0.025 steps; type any value for fine control.")
         self.duration_label = QLabel(f"{BASE_DURATION:.1f} s")
         self.duration_label.setToolTip("Resulting video duration")
@@ -652,6 +662,25 @@ class MainWindow(QWidget):
         self.vdec_spin.setRange(0, 3)
         self.vdec_spin.setValue(1)
         self.vdec_spin.setToolTip("Decimal places of the tower value")
+        self.scale_combo = QComboBox()
+        self.scale_combo.addItems(SCALE_MODES.keys())
+        self.scale_combo.setToolTip(
+            "How score maps to tower height. Auto picks Logarithmic when the "
+            "biggest value is far larger than the smallest (e.g. 30K vs 200M) "
+            "so every tower stays visible and readable.")
+        self.compact_combo = QComboBox()
+        self.compact_combo.addItems(COMPACT_MODES.keys())
+        self.compact_combo.setToolTip(
+            "Shorten big numbers on towers: 200,000,000 -> 200M. Auto only "
+            "does this when the Suffix field is empty.")
+        self.autoframe_check = QCheckBox("Auto camera framing")
+        self.autoframe_check.setChecked(True)
+        self.autoframe_check.setToolTip(
+            "Dolly in/out so the tower being revealed always fills the "
+            "screen. Camera Distance then acts as a zoom trim (19.5 = neutral).")
+        self.spot_check = QCheckBox("Spotlight focused tower")
+        self.spot_check.setChecked(True)
+        self.spot_check.setToolTip("Gently dim towers away from the one on stage")
         gl.addLayout(_slider_row(self.cam_elev_label, self.cam_elev_slider))
         gl.addLayout(_slider_row(self.cam_dist_label, self.cam_dist_slider))
         gl.addLayout(_slider_row(self.cam_ahead_label, self.cam_ahead_slider))
@@ -668,6 +697,10 @@ class MainWindow(QWidget):
         gl.addLayout(_field_row("Value Prefix", self.vpre_edit,
                                 _mini_label("Suffix"), self.vsu_edit))
         gl.addLayout(_field_row("Value Decimals", self.vdec_spin))
+        gl.addLayout(_field_row("Bar scale", self.scale_combo))
+        gl.addLayout(_field_row("Big numbers", self.compact_combo))
+        gl.addWidget(self.autoframe_check)
+        gl.addWidget(self.spot_check)
 
         # 7. Typography & Colors
         gl = self._collapsible_group(form, "Typography && Colors", expanded=False)
@@ -875,6 +908,10 @@ class MainWindow(QWidget):
             self.vpre_edit.textChanged,
             self.vsu_edit.textChanged,
             self.vdec_spin.valueChanged,
+            self.scale_combo.currentIndexChanged,
+            self.compact_combo.currentIndexChanged,
+            self.autoframe_check.toggled,
+            self.spot_check.toggled,
         ]
         for sig in simple:
             sig.connect(self._on_setting_changed)
@@ -902,6 +939,9 @@ class MainWindow(QWidget):
         self.speed_spin.valueChanged.connect(
             lambda _v: self.duration_label.setText(
                 f"{self._video_duration():.1f} s"))
+        self.topn_spin.valueChanged.connect(
+            lambda _v: self.duration_label.setText(
+                f"{self._video_duration():.1f} s"))
         self.cam_elev_slider.valueChanged.connect(
             lambda v: self.cam_elev_label.setText(f"Camera Elevation: {v / 10:.1f}"))
         self.cam_dist_slider.valueChanged.connect(
@@ -927,7 +967,7 @@ class MainWindow(QWidget):
 
     # -------------------------------------------------------------- config
     def _video_duration(self):
-        return BASE_DURATION / max(0.025, self.speed_spin.value())
+        return compute_duration(self.topn_spin.value(), self.speed_spin.value())
 
     def collect_config(self):
         cfg = RenderConfig()
@@ -980,6 +1020,10 @@ class MainWindow(QWidget):
         cfg.value_prefix = self.vpre_edit.text()
         cfg.value_suffix = self.vsu_edit.text()
         cfg.value_decimals = self.vdec_spin.value()
+        cfg.scale_mode = SCALE_MODES[self.scale_combo.currentText()]
+        cfg.value_compact = COMPACT_MODES[self.compact_combo.currentText()]
+        cfg.cam_auto_frame = self.autoframe_check.isChecked()
+        cfg.spotlight = 0.28 if self.spot_check.isChecked() else 0.0
         cfg.tower_color = self.tower_color_btn.rgb
         cfg.plate_color = self.plate_color_btn.rgb
         cfg.value_color = self.value_color_btn.rgb
@@ -1038,6 +1082,10 @@ class MainWindow(QWidget):
             "value_prefix": self.vpre_edit.text(),
             "value_suffix": self.vsu_edit.text(),
             "value_decimals": self.vdec_spin.value(),
+            "scale_mode": self.scale_combo.currentText(),
+            "value_compact": self.compact_combo.currentText(),
+            "auto_frame": self.autoframe_check.isChecked(),
+            "spotlight": self.spot_check.isChecked(),
             "sky_top": list(self.skytop_color_btn.rgb),
             "sky_bottom": list(self.skybot_color_btn.rgb),
             "ground_color": list(self.ground_color_btn.rgb),
@@ -1127,6 +1175,10 @@ class MainWindow(QWidget):
             text(self.vpre_edit, "value_prefix")
             text(self.vsu_edit, "value_suffix")
             num(self.vdec_spin, "value_decimals")
+            combo(self.scale_combo, "scale_mode")
+            combo(self.compact_combo, "value_compact")
+            check(self.autoframe_check, "auto_frame")
+            check(self.spot_check, "spotlight")
             color(self.skytop_color_btn, "sky_top")
             color(self.skybot_color_btn, "sky_bottom")
             color(self.ground_color_btn, "ground_color")

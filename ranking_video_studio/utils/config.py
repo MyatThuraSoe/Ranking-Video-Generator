@@ -21,7 +21,19 @@ FPS_OPTIONS = [24, 30, 60]
 MAX_ROWS = 100
 TOP_N = 10
 MAX_DIMENSION = 2560
-BASE_DURATION = 8.0   # video seconds at 1.0x camera speed; duration = BASE / speed
+BASE_DURATION = 8.0   # minimum video seconds at 1.0x camera speed
+SECONDS_PER_ITEM = 1.2    # screen time per ranked item (readable on YouTube)
+INTRO_SECONDS = 1.4       # establishing shot + title reveal
+OUTRO_SECONDS = 3.2       # hero hold on #1
+
+
+def compute_duration(top_n, speed=1.0):
+    """Video length grows with the number of items so 50 towers stay readable.
+
+    Set SECONDS_PER_ITEM = 0 to restore the old fixed BASE_DURATION / speed.
+    """
+    body = INTRO_SECONDS + OUTRO_SECONDS + max(0, int(top_n)) * SECONDS_PER_ITEM
+    return max(BASE_DURATION, body) / max(0.025, float(speed))
 
 
 @dataclass
@@ -101,6 +113,26 @@ class RenderConfig:
     value_prefix: str = "$ "
     value_suffix: str = " B"
     value_decimals: int = 1
+    value_compact: str = "auto"    # auto | on | off  (200,000,000 -> 200M)
+    text_boost: float = 1.12       # uniform on-tower text enlargement
+
+    # ---- Scaling / readability (huge value gaps) ----
+    scale_mode: str = "auto"       # auto | linear | sqrt | log | rank
+    rank_blend: float = 0.12       # 0..0.5 equal-step mix so close values differ
+    min_tower_h: float = 3.2       # world units; keeps text legible on small bars
+    show_scale_note: bool = True   # footnote explaining non-linear bars
+    show_gap_callout: bool = True  # "#1 is 6,667x #50" during the finale
+
+    # ---- Cinematic camera ----
+    cam_auto_frame: bool = True    # dolly so the focus tower fills the screen
+    cam_frame_fill: float = 0.68   # fraction of frame height a tower should fill
+    cam_min_distance: float = 8.0
+    cam_level: float = 0.85        # 1 = no tilt (vertical edges stay vertical)
+    cam_sway: float = 1.0          # subtle handheld drift (0 = locked off)
+    intro_seconds: float = INTRO_SECONDS
+    outro_seconds: float = OUTRO_SECONDS
+    spotlight: float = 0.28        # dim non-focused towers (0 = off)
+    vignette: float = 0.30         # edge darkening (0 = off)
 
     def scale(self):
         return max(0.6, min(self.width, self.height) / 1080.0)
